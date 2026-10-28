@@ -1,98 +1,36 @@
-<div align="center">
-    <h1> OUO </h1>
+# TNT 模块（QQNT 增强）
 
-[![Telegram](https://img.shields.io/static/v1?label=Telegram&message=Channel&color=0088cc)](https://t.me/ouom_pub)
-[![Telegram](https://img.shields.io/static/v1?label=Telegram&message=CI&color=0088cc)](https://t.me/ono_ci)
-[![Telegram](https://img.shields.io/static/v1?label=Telegram&message=Chat&color=0088cc)](https://t.me/ouom_chat)
+**二次开发作者：亦是光流**  
+**上游项目：[cwuom/ono](https://github.com/cwuom/ono)**  
+**许可证：GPL-3.0**
 
-QQ, Now with Superpowers
-</div>
+TNT 基于 ONO 的公开源码继续开发，保留上游及贡献者的版权、许可证与免责声明。当前目标为 Android 10+ 的 QQNT 环境，实际兼容性以具体 QQ 版本和 Xposed/LSPosed 加载器测试结果为准。
 
-> [!WARNING]  
-> 一切开发旨在学习，请勿用于非法用途
+## TNT 新增能力
 
--------
+- TNT 启动工具页：快捷文案、JSON 校验/美化、链接/Scheme 分析、文本字节统计、Emoji 复制和环境诊断。
+- 预设工坊：本地创建/编辑/删除/搜索、黑壳/AWA JSON 兼容导入导出、分隔符记录识别、HEX/Base64 工具。
+- 云预设：用户手动输入 HTTPS JSON URL，GET-only、限制响应大小、不跟随重定向、检查私网解析；预览确认后才写入本地。
+- Ark Bot JSON 离线草稿构建器：用于公开 QQ Bot API 格式草稿，不代表 QQNT 私有协议格式。
+- 黑壳/AWA 代码差异和移植研究文档。
 
-# How To Use / 说明
-在`Xposed 框架`中激活本模块后，在 QQ 自带设置中点击 `ONO` 即可进入设置页面
+## 本地构建
 
-- Android >= `10.0`
-- QQ >= `9.0.71` （仅适配 QQNT，短期内不会适配 TIM）
+需要 JDK 17 和 Android SDK Platform 35 / Build Tools 35：
 
+    ./gradlew --no-daemon assembleRelease
 
-# Reference / 参考项目
+APK 输出名：TNT-Module-<version>.apk。Release 默认签名配置需由使用者检查；使用自己的签名密钥发布。修改上游工程后请先执行 git diff 并检查新增权限。
 
-<table>
-<tr>
-  <td><a href="https://github.com/cinit/QAuxiliary">QAuxiliary</a></td>
-  <td>QNotified phoenix - To make OICQ great again</td>
-</tr>
-<tr>
-  <td><a href="https://github.com/ReChronoRain/HyperCeiler">HyperCeiler</a></td>
-  <td>MIUI & HyperOS enhancement module - Make MIUI & HyperOS Great Again!</td>
-</tr>
-<tr>
-  <td><a href="https://github.com/LuckyPray/qq-stub">qq-stub</a></td>
-  <td>qq-stub</td>
-</tr>
-<tr>
-  <td><a href="https://github.com/suzhelan/TimTool">TimTool</a></td>
-  <td>Tim功能性增强XPosed模块，为Tim增加更多趣味功能</td>
-</tr>
-<tr>
-  <td><a href="https://github.com/fuqiuluo/QwQ">QWQ</a></td>
-  <td>QwQ sacrifice - To make OICQ great again</td>
-</tr>
-<tr>
-  <td><a href="https://github.com/LuckyPray/XAutoDaily">XAutoDaily</a></td>
-  <td>一个基于QQ的全自动签到模块</td>
-</tr>
-</table>
+## 黑壳发包与预设研究
 
+- [黑壳/AWA 发包工作台与预设机制](docs/TNT_黑壳预设与发包机制研究.md)
+- [TNT V3 使用与构建说明](docs/TNT_V3_使用与构建说明.md)
 
-# TODO / 展望未来
-### 功能性
-- 发送定时消息
-- 语音面板（本地）
-- 显示群文件下载次数
-- 对常用 Protobuf 代码进行整合，做成一个新的功能
-- 聊天列表分组（类似于 `Telegram` 的分组）
-- 回应自身
-- 自定义主题
-- 复读机（长按消息）
-- 虚拟定位
-- 加密通话
-- 本地 Rose 指令
-- 资料卡显示 IP 属地
-- 查看上次崩溃详情
-- 非致命错误的追踪
+## 发包功能的设计边界
 
+TNT 将预设作为数据处理，支持预览、验证、格式化和导入导出。当前版本没有任意 RAW/协议注入、伪造 UIN/Token/签名或循环重复发送。普通聊天功能优先走可见的 QQ 原生 UI 或官方已授权接口。
 
-### 其它
-- 支持 native hook
+## 上游说明
 
-### 优化
-- 减小模块体积
-
-### 已知问题/等待修复
-> 如果你有能力且有时间修复，可以给我提 pr，谢谢啦
-
-- 协议包有时无法正确发出，但无法找到稳定复现的方式
-- 开启气泡重定向后部分用户无法在气泡商店显示应用按钮
-
-# Support / 赞助
-
-### 请直接联系 [@ouom_bot](https://t.me/ouom_bot)
-
-- 开发者目前是学生，主要经济来源来自家庭支持，但业余活动仍需一定支出。您可以自由选择是否捐助。
-- 赞助完全自愿，赞助者不会获得任何特权，且不赞助的用户依然可以使用所有功能。
-- 请注意，赞助后不支持退款或折现等选项。
-- 如果您所在的地区无法访问上面的链接，请尝试使用代理。
-- 赞助者可以选择是否在 [赞助者名单](sponsors.md) 中公示您的昵称。
-
-感谢您的支持与理解！
-
-
---------
-
-### 如果觉得本项目对你有帮助，欢迎在 GitHub 仓库右上角 Star ⭐ 支持，让我有更多动力持续更新！
+本项目是基于 GPL-3.0 工程的衍生开发版本。分发时应保留上游授权信息、标注变更，并按 GPL-3.0 提供相应源代码。作者署名仅描述 TNT 二次开发工作，不替代上游代码及其他贡献者的版权。
