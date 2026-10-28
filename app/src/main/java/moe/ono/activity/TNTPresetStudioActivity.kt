@@ -315,10 +315,11 @@ class TNTPresetStudioActivity : AppCompatTransferActivity() {
         Thread {
             var conn: HttpsURLConnection? = null
             try {
-                val url = URL(raw)
-                require(url.protocol.equals("https", true) && url.userInfo == null && (url.port == -1 || url.port == 443)) {
+                val uri = java.net.URI(raw)
+                require(uri.scheme.equals("https", true) && uri.userInfo == null && (uri.port == -1 || uri.port == 443)) {
                     "只允许 HTTPS 默认端口，且 URL 不能含用户名/密码"
                 }
+                val url = uri.toURL()
                 require(!isPrivateHost(url.host)) { "禁止访问本机或私有网络地址" }
                 val resolved = InetAddress.getAllByName(url.host)
                 require(resolved.isNotEmpty() && resolved.none { isPrivateAddress(it) }) { "云主机解析到本机/私有地址，已阻止" }
