@@ -2,6 +2,7 @@ package moe.ono.hooks.item.chat
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.Intent
 import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
@@ -18,6 +19,7 @@ import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XC_MethodHook.MethodHookParam
 import de.robv.android.xposed.XposedHelpers
 import moe.ono.R
+import moe.ono.activity.TNTPresetStudioActivity
 import moe.ono.bridge.ntapi.ChatTypeConstants
 import moe.ono.config.CacheConfig
 import moe.ono.config.ConfigManager
@@ -197,6 +199,7 @@ class BottomShortcutMenu : BaseClickableFunctionHookItem() {
 
 
 
+        items.add("TNT 预设工坊")
         items.add("匿名化")
         XPopup.Builder(fixCtx)
             .hasShadowBg(false)
@@ -213,6 +216,13 @@ class BottomShortcutMenu : BaseClickableFunctionHookItem() {
                 }
 
                 when (text) {
+                    "TNT 预设工坊" -> try {
+                        val intent = Intent(view.context, TNTPresetStudioActivity::class.java)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        view.context.startActivity(intent)
+                    } catch (e: Exception) {
+                        Toasts.error(view.context, "无法打开 TNT 预设工坊")
+                    }
                     "QQPacketHelper" -> SyncUtils.runOnUiThread {
                         PacketHelperDialog.createView(
                             null,
