@@ -24,6 +24,9 @@ APK 输出名：TNT-Module-<version>.apk。Release 默认签名配置需由使�
 
 ## 黑壳发包与预设研究
 
+- [云预设目录格式与安全说明](docs/云预设目录格式与安全说明.md)
+- [云预设示例 JSON](examples/cloud-presets.example.json)
+
 - [黑壳/AWA 发包工作台与预设机制](docs/TNT_黑壳预设与发包机制研究.md)
 - [TNT V3 使用与构建说明](docs/TNT_V3_使用与构建说明.md)
 
