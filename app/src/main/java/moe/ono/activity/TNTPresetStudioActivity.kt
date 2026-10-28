@@ -232,7 +232,7 @@ class TNTPresetStudioActivity : AppCompatTransferActivity() {
         val kv = EditText(this).apply {
             hint = "kv JSON 数组，例如 [{\"key\":\"title\",\"value\":\"Hello\"}]"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
-            minLines = 5; setText("[{\\\"key\\\":\\\"title\\\",\\\"value\\\":\\\"TNT 示例\\\"}]")
+            minLines = 5; setText("[{\"key\":\"title\",\"value\":\"TNT 示例\"}]")
         }
         val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(6), dp(4), dp(6), 0); addView(templateId, lp()); addView(kv, lp()) }
         val dialog = MaterialAlertDialogBuilder(this).setTitle("Ark JSON 离线草稿")
