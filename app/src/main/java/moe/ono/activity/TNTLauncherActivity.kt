@@ -41,6 +41,7 @@ class TNTLauncherActivity : AppCompatTransferActivity() {
             startActivity(Intent(this, TNTPresetStudioActivity::class.java))
         }
         addButton(body, "快捷文案") { phraseTool() }
+        addButton(body, "QQ 原生分享助手") { nativeShare() }
         addButton(body, "JSON 美化 / 校验") { jsonTool() }
         addButton(body, "QQ Scheme / 链接分析") { linkTool() }
         addButton(body, "文本与字节长度检查") { textTool() }
@@ -62,6 +63,31 @@ class TNTLauncherActivity : AppCompatTransferActivity() {
             .setView(input).setNegativeButton("关闭", null)
             .setNeutralButton("保存") { _, _ -> prefs.edit().putString("last", input.text.toString()).apply(); toast("已在本机保存") }
             .setPositiveButton("复制") { _, _ -> copy("TNT 文案", input.text.toString()) }.show()
+    }
+
+    private fun nativeShare() {
+        val input = EditText(this).apply {
+            hint = "输入文本、链接或媒体分享说明"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            minLines = 4
+        }
+        MaterialAlertDialogBuilder(this).setTitle("QQ 原生分享助手")
+            .setMessage("通过 Android 系统分享面板调用设备上已安装的应用（包括 QQ）。TNT 不读取登录态、不构造内部协议包。")
+            .setView(input).setNegativeButton("取消", null)
+            .setNeutralButton("只复制") { _, _ -> copy("TNT 分享草稿", input.text.toString()) }
+            .setPositiveButton("选择应用") { _, _ ->
+                val text = input.text.toString().trim()
+                if (text.isBlank()) { toast("请先输入文本或链接"); return@setPositiveButton }
+                val share = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, text)
+                }
+                try {
+                    startActivity(Intent.createChooser(share, "分享至"))
+                } catch (t: Throwable) {
+                    toast("系统分享面板不可用：${t.javaClass.simpleName}")
+                }
+            }.show()
     }
 
     private fun jsonTool() {
