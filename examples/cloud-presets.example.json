@@ -1,0 +1,26 @@
+[
+  {
+    "name": "TNT 文本示例",
+    "content": "TNT 模块 · 亦是光流",
+    "package_name": "text",
+    "description": "仅用于验证/复制的文本示例",
+    "tags": ["文本", "示例"],
+    "schema_version": 1
+  },
+  {
+    "name": "本地卡片预览草稿",
+    "content": "{\"title\":\"TNT 预览\",\"description\":\"仅本地 JSON 草稿，不保证可由 QQNT 直接发送\"}",
+    "package_name": "preview",
+    "description": "本地 JSON 结构预览",
+    "tags": ["json", "card"],
+    "schema_version": 1
+  },
+  {
+    "name": "QQ Bot Ark 草稿",
+    "content": "{\"msg_type\":3,\"ark\":{\"template_id\":1,\"kv\":[{\"key\":\"title\",\"value\":\"示例标题\"}]}}",
+    "package_name": "QQ Bot Ark JSON",
+    "description": "离线草稿。发布前按当前官方文档和自己的模板 ID 校验。",
+    "tags": ["ark", "bot"],
+    "schema_version": 1
+  }
+]

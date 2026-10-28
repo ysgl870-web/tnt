@@ -34,6 +34,16 @@
             app:icon="@drawable/ic_sigma"
             app:title="Sigma" />
 
+        <Preference
+            app:key="tnt_tools"
+            app:title="TNT 工具中心"
+            app:summary="快捷文案、JSON、链接分析与诊断" />
+
+        <Preference
+            app:key="tnt_presets"
+            app:title="TNT 预设工坊"
+            app:summary="黑壳/AWA 兼容预设、云目录与 Ark 草稿" />
+
     </PreferenceCategory>
 
     <PreferenceCategory

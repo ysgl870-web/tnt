@@ -215,12 +215,22 @@ open class OUOSettingActivity : BaseActivity() {
         override fun onPreferenceTreeClick(preference: Preference): Boolean {
             val key = preference.key
             when (key) {
+                "tnt_tools" -> {
+                    startActivity(Intent(requireContext(), TNTLauncherActivity::class.java))
+                    return true
+                }
+                "tnt_presets" -> {
+                    startActivity(Intent(requireContext(), TNTPresetStudioActivity::class.java))
+                    return true
+                }
+            }
+            when (key) {
                 "telegram" -> {
                     jump(requireContext(), "https://t.me/ouom_pub")
                     return super.onPreferenceTreeClick(preference)
                 }
                 "github" -> {
-                    jump(requireContext(), "https://github.com/cwuom/ono")
+                    jump(requireContext(), "https://github.com/ysgl870-web/tnt")
                     return super.onPreferenceTreeClick(preference)
                 }
                 "build_time", "build_uuid", "version","prek_enable_log", "hook_priority" -> {
