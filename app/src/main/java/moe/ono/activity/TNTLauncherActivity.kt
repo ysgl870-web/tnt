@@ -120,7 +120,7 @@ class TNTLauncherActivity : AppCompatTransferActivity() {
                 dialog.setOnShowListener {
                     dialog.getButton(-1).setOnClickListener {
                         val value = input.text.toString()
-                        val report = "字符数：${value.length}\n代码点数：${value.codePointCount(0, value.length)}\nUTF-8 字节数：${value.toByteArray(StandardCharsets.UTF_8).size}\n行数：${if (value.isEmpty()) 0 else value.count { it == '\\n' } + 1}"
+                        val report = "字符数：${value.length}\n代码点数：${value.codePointCount(0, value.length)}\nUTF-8 字节数：${value.toByteArray(StandardCharsets.UTF_8).size}\n行数：${if (value.isEmpty()) 0 else value.count { it == '\n' } + 1}"
                         MaterialAlertDialogBuilder(this).setTitle("统计结果").setMessage(report)
                             .setNeutralButton("复制报告") { _, _ -> copy("文本统计", report) }.setPositiveButton("关闭", null).show()
                         dialog.dismiss()
