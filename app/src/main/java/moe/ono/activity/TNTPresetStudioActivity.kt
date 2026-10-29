@@ -16,6 +16,8 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.card.MaterialCardView
+import moe.ono.R
 import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
@@ -31,7 +33,7 @@ import javax.net.ssl.HttpsURLConnection
  * TNT local/cloud preset editor. Preset data is treated as untrusted text only:
  * this Activity intentionally does not dispatch arbitrary QQNT protocol packets.
  */
-class TNTPresetStudioActivity : AppCompatTransferActivity() {
+class TNTPresetStudioActivity : BaseActivity() {
     private data class Preset(
         val id: String = UUID.randomUUID().toString(),
         val name: String,
@@ -53,41 +55,65 @@ class TNTPresetStudioActivity : AppCompatTransferActivity() {
         if (uri != null) safely("导入预设失败") { importFrom(uri) }
     }
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
+    override fun doOnEarlyCreate(savedInstanceState: Bundle?, isInitializing: Boolean) {
+        super.doOnEarlyCreate(savedInstanceState, isInitializing)
+        setTheme(R.style.Theme_Ono)
+    }
+
+    override fun doOnCreate(savedInstanceState: Bundle?): Boolean {
+        super.doOnCreate(null)
         title = "TNT 预设工坊"
         presets = loadPresets().toMutableList()
         buildUi()
         render()
+        return true
     }
 
     private fun buildUi() {
-        val outer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(10), dp(14), dp(14))
-        }
-        outer.addView(TextView(this).apply {
-            text = "TNT 发包草稿 / 预设工坊"
-            textSize = 23f
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
-        }, lp())
-        outer.addView(TextView(this).apply {
-            text = "作者：亦是光流\n兼容 AWA/黑壳常见 name/content 预设。支持本地编辑、JSON 校验、导入导出、云目录预览和离线草稿。模板不会被执行，也不会自动发送原始协议包。"
-            textSize = 13f
-        }, lp())
-
-        addButton(outer, "新建预设") { editPreset(null) }
-        addButton(outer, "导入 JSON / 黑壳分隔符") {
+            val outer = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(14), dp(12), dp(14), dp(18))
+            }
+            val hero = MaterialCardView(this).apply {
+                radius = dp(20).toFloat()
+                cardElevation = 0f
+                setCardBackgroundColor(android.graphics.Color.rgb(23, 105, 210))
+                strokeWidth = 0
+            }
+            val heroContent = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(16), dp(17), dp(16), dp(16))
+            }
+            heroContent.addView(TextView(this).apply {
+                text = "预设工坊"
+                textSize = 23f
+                setTextColor(android.graphics.Color.WHITE)
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+            }, lp())
+            heroContent.addView(TextView(this).apply {
+                text = "亦是光流 · AWA / 黑壳格式兼容\n本地管理、云端预览、格式校验"
+                textSize = 13f
+                setTextColor(0xFFEAF2FF.toInt())
+                setPadding(0, dp(5), 0, 0)
+            }, lp())
+            hero.addView(heroContent)
+            outer.addView(hero, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = dp(12)
+            })
+            addSection(outer, "预设管理", "导入前预览；保存内容只作为数据，不会自动发包")
+        addButton(outer, "新建预设", "新建文本、JSON 或卡片草稿", "＋") { editPreset(null) }
+        addButton(outer, "导入 JSON / 黑壳分隔符", "兼容 name/content 与历史分隔符记录", "⇩") {
             openJson.launch(arrayOf("application/json", "text/json", "text/plain", "*/*"))
         }
-        addButton(outer, "导出 AWA/黑壳兼容 JSON") {
+        addButton(outer, "导出 AWA/黑壳兼容 JSON", "输出可交换的 name/content 数组", "⇧") {
             createJson.launch("TNT-presets-${System.currentTimeMillis()}.json")
         }
-        addButton(outer, "云预设目录（手动 HTTPS）") { askCloudUrl() }
-        addButton(outer, "Ark JSON 离线草稿构建器") { arkBuilder() }
-        addButton(outer, "HEX / Base64 工具") { byteTool() }
-        addButton(outer, "导入安全示例预设") { installExamples() }
-        addButton(outer, "检查整个本地预设库") { validateAll() }
+        addButton(outer, "云预设目录（手动 HTTPS）", "只读远程 JSON；确认选择后才导入", "☁") { askCloudUrl() }
+        addSection(outer, "开发工具", "用于验证和整理模板，不会执行模板内容")
+        addButton(outer, "Ark JSON 离线草稿构建器", "构建 QQ Bot 风格 Ark JSON 草稿", "{ }") { arkBuilder() }
+        addButton(outer, "HEX / Base64 工具", "仅在本机转换字节表示", "⇄") { byteTool() }
+        addButton(outer, "导入安全示例预设", "添加几条本地示例模板", "✦") { installExamples() }
+        addButton(outer, "检查整个本地预设库", "统计 JSON、HEX、文本及疑似错误项", "✓") { validateAll() }
 
         search = EditText(this).apply {
             hint = "搜索名称、内容或包名"
@@ -526,9 +552,65 @@ class TNTPresetStudioActivity : AppCompatTransferActivity() {
         toast("已复制到剪贴板")
     }
 
-    private fun addButton(root: LinearLayout, text: String, action: () -> Unit) {
-        root.addView(Button(this).apply { this.text = text; isAllCaps = false; setOnClickListener { safely("操作失败", action) } }, lp())
+    private fun addSection(root: LinearLayout, title: String, summary: String) {
+        val group = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(2), dp(8), dp(2), dp(5)) }
+        group.addView(TextView(this).apply {
+            text = title; textSize = 17f
+            setTextColor(if (android.os.Build.VERSION.SDK_INT >= 23) getColor(R.color.firstTextColor) else resources.getColor(R.color.firstTextColor))
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }, lp())
+        group.addView(TextView(this).apply {
+            text = summary; textSize = 12f
+            setTextColor(if (android.os.Build.VERSION.SDK_INT >= 23) getColor(R.color.secondTextColor) else resources.getColor(R.color.secondTextColor))
+        }, lp())
+        root.addView(group, lp())
     }
+
+    private fun addButton(root: LinearLayout, text: String, summary: String, icon: String, action: () -> Unit) {
+        val card = MaterialCardView(this).apply {
+            radius = dp(15).toFloat()
+            cardElevation = 0f
+            strokeWidth = dp(1)
+            strokeColor = 0x223F6FA5
+            setCardBackgroundColor(if (android.os.Build.VERSION.SDK_INT >= 23) getColor(R.color.card_bg) else resources.getColor(R.color.card_bg))
+            isClickable = true
+            isFocusable = true
+            rippleColor = android.content.res.ColorStateList.valueOf(0x223F8CFF)
+            setOnClickListener { safely("无法打开：$text", action) }
+        }
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            androidGravityCompat()
+            setPadding(dp(12), dp(11), dp(12), dp(11))
+        }
+        row.addView(TextView(this).apply {
+            this.text = icon; textSize = 19f
+            gravity = android.view.Gravity.CENTER
+            setTextColor(0xFF1769D2.toInt())
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = dp(11).toFloat(); setColor(0x1D3987E8)
+            }
+        }, LinearLayout.LayoutParams(dp(40), dp(40)))
+        val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(11), 0, dp(4), 0) }
+        column.addView(TextView(this).apply {
+            this.text = text; textSize = 14f
+            setTextColor(if (android.os.Build.VERSION.SDK_INT >= 23) getColor(R.color.firstTextColor) else resources.getColor(R.color.firstTextColor))
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }, lp())
+        column.addView(TextView(this).apply {
+            this.text = summary; textSize = 12f
+            setTextColor(if (android.os.Build.VERSION.SDK_INT >= 23) getColor(R.color.secondTextColor) else resources.getColor(R.color.secondTextColor))
+            setPadding(0, dp(3), 0, 0)
+        }, lp())
+        row.addView(column, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        row.addView(TextView(this).apply { this.text = "›"; textSize = 24f; setTextColor(0xFF7F8EA3.toInt()) },
+            LinearLayout.LayoutParams(dp(20), ViewGroup.LayoutParams.WRAP_CONTENT))
+        card.addView(row)
+        root.addView(card, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            bottomMargin = dp(7)
+        })
+    }
+    private fun android.widget.LinearLayout.androidGravityCompat() { gravity = android.view.Gravity.CENTER_VERTICAL }
     private fun lp() = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
     private fun dp(n: Int) = (n * resources.displayMetrics.density + 0.5f).toInt()
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
