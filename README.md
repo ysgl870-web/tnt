@@ -14,6 +14,13 @@ TNT 基于 ONO 的公开源码继续开发，保留上游及贡献者的版权�
 - Ark Bot JSON 离线草稿构建器：用于公开 QQ Bot API 格式草稿，不代表 QQNT 私有协议格式。
 - 黑壳/AWA 代码差异和移植研究文档。
 
+## 工具中心闪退修复与 UI
+
+- [工具中心闪退修复与 UI 优化说明](docs/工具中心闪退修复与UI优化.md)
+- [V4 修复验证状态](docs/TNT_V4_闪退修复状态.md)
+
+V4 将工具页与预设页迁移到 ONO 的 `BaseActivity` 生命周期桥接，并增加安全回退界面和双列卡片式 UI。当前仍需真实 Android/QQ 环境完成最终构建和安装验证。
+
 ## 本地构建
 
 需要 JDK 17 和 Android SDK Platform 35 / Build Tools 35：
