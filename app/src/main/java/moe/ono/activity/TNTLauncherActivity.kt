@@ -8,6 +8,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.text.InputType
+import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
@@ -16,6 +17,8 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.card.MaterialCardView
+import moe.ono.R
 import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
@@ -23,36 +26,73 @@ import java.net.URI
 import java.nio.charset.StandardCharsets
 
 /** TNT launch surface; all helper operations are local unless the user explicitly opens a link. */
-class TNTLauncherActivity : AppCompatTransferActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        title = "TNT 模块"
+class TNTLauncherActivity : BaseActivity() {
+    override fun doOnEarlyCreate(savedInstanceState: Bundle?, isInitializing: Boolean) {
+        super.doOnEarlyCreate(savedInstanceState, isInitializing)
+        setTheme(R.style.Theme_Ono)
+    }
+
+    override fun doOnCreate(savedInstanceState: Bundle?): Boolean {
+        super.doOnCreate(null)
+        title = "光流工具中心"
         val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(12), dp(16), dp(16)) }
-        body.addView(TextView(this).apply {
-            text = "TNT 模块"
-            textSize = 28f
+        val hero = MaterialCardView(this).apply {
+            radius = dp(22).toFloat()
+            cardElevation = dp(2).toFloat()
+            setCardBackgroundColor(android.graphics.Color.rgb(23, 105, 210))
+            strokeWidth = 0
+        }
+        val heroContent = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(20), dp(18), dp(18))
+        }
+        heroContent.addView(TextView(this).apply {
+            text = "光流工具中心"
+            textSize = 25f
+            setTextColor(android.graphics.Color.WHITE)
             setTypeface(typeface, android.graphics.Typeface.BOLD)
         }, lp())
-        body.addView(TextView(this).apply {
-            text = "QQ 增强工具箱 · 作者：亦是光流\nAndroid ${Build.VERSION.RELEASE} / API ${Build.VERSION.SDK_INT}\n此工具页以本地处理为主；云预设必须手动指定 HTTPS 地址。"
-            textSize = 14f
+        heroContent.addView(TextView(this).apply {
+            text = "TNT 模块 · 亦是光流\nAndroid ${Build.VERSION.RELEASE} / API ${Build.VERSION.SDK_INT}"
+            textSize = 13f
+            setTextColor(0xFFEAF2FF.toInt())
+            setPadding(0, dp(6), 0, 0)
         }, lp())
-        addButton(body, "黑壳 / AWA 预设工坊") {
+        heroContent.addView(TextView(this).apply {
+            text = "本地优先 · 预设可管理 · 云内容先预览后导入"
+            textSize = 12f
+            setTextColor(0xFFD9E8FF.toInt())
+            setPadding(0, dp(12), 0, 0)
+        }, lp())
+        hero.addView(heroContent)
+        body.addView(hero, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            bottomMargin = dp(14)
+        })
+        addSection(body, "常用工具", "复制、分析和格式化，不会自动发送协议包")
+        addButton(body, "黑壳 / AWA 预设工坊", "本地预设、云目录预览与格式工具", "▤") {
             startActivity(Intent(this, TNTPresetStudioActivity::class.java))
         }
-        addButton(body, "快捷文案") { phraseTool() }
-        addButton(body, "QQ 原生分享助手") { nativeShare() }
-        addButton(body, "JSON 美化 / 校验") { jsonTool() }
-        addButton(body, "QQ Scheme / 链接分析") { linkTool() }
-        addButton(body, "文本与字节长度检查") { textTool() }
-        addButton(body, "常用表情复制") { emojiTool() }
-        addButton(body, "复制环境诊断") { copyDiagnostic() }
-        addButton(body, "关于与许可") {
+        addButton(body, "快捷文案", "保存常用回复，一键复制", "✎") { phraseTool() }
+        addButton(body, "QQ 原生分享助手", "通过系统分享面板交给 QQ 等应用", "↗") { nativeShare() }
+        addButton(body, "JSON 美化 / 校验", "校验结构并复制格式化内容", "{ }") { jsonTool() }
+        addButton(body, "QQ Scheme / 链接分析", "显示协议、主机、路径和参数名", "⌁") { linkTool() }
+        addButton(body, "文本与字节长度检查", "字符、代码点、UTF-8 字节和行数", "≡") { textTool() }
+        addButton(body, "常用表情复制", "快速复制常见 Emoji", "☺") { emojiTool() }
+        addButton(body, "复制环境诊断", "生成设备和模块基础信息", "ⓘ") { copyDiagnostic() }
+        addSection(body, "模块信息", "作者、上游和开源许可证")
+        addButton(body, "关于与许可", "查看作者信息与 GPL-3.0 说明", "©") {
             MaterialAlertDialogBuilder(this).setTitle("TNT 模块")
                 .setMessage("二次开发作者：亦是光流\n上游项目：cwuom/ono\n许可证：GPL-3.0\n\n本模块基于 ONO 二次开发，保留上游版权与许可要求。内部 QQNT Hook 需根据 QQ 版本测试。")
                 .setPositiveButton("关闭", null).show()
         }
-        setContentView(ScrollView(this).apply { addView(body) })
+        val scroll = ScrollView(this).apply {
+            clipToPadding = false
+            isFillViewport = true
+            setPadding(0, 0, 0, dp(12))
+            addView(body)
+        }
+        setContentView(scroll)
+        return true
     }
 
     private fun phraseTool() {
@@ -167,9 +207,81 @@ class TNTLauncherActivity : AppCompatTransferActivity() {
         copy("TNT 诊断", info)
     }
 
-    private fun addButton(root: LinearLayout, label: String, action: () -> Unit) {
-        root.addView(Button(this).apply { text = label; isAllCaps = false; setOnClickListener { try { action() } catch (t: Throwable) { toast("操作失败：${t.javaClass.simpleName}") } } }, lp())
+    private fun addSection(root: LinearLayout, title: String, summary: String) {
+        val group = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(2), dp(7), dp(2), dp(5)) }
+        group.addView(TextView(this).apply {
+            text = title; textSize = 17f
+            setTextColor(if (Build.VERSION.SDK_INT >= 23) getColor(R.color.firstTextColor) else resources.getColor(R.color.firstTextColor))
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }, lp())
+        group.addView(TextView(this).apply {
+            text = summary; textSize = 12f
+            setTextColor(if (Build.VERSION.SDK_INT >= 23) getColor(R.color.secondTextColor) else resources.getColor(R.color.secondTextColor))
+        }, lp())
+        root.addView(group, lp())
     }
+
+    private fun addButton(root: LinearLayout, label: String, summary: String, icon: String, action: () -> Unit) {
+        val card = MaterialCardView(this).apply {
+            radius = dp(16).toFloat()
+            cardElevation = 0f
+            strokeWidth = dp(1)
+            strokeColor = 0x223F6FA5
+            setCardBackgroundColor(if (Build.VERSION.SDK_INT >= 23) getColor(R.color.card_bg) else resources.getColor(R.color.card_bg))
+            isClickable = true
+            isFocusable = true
+            rippleColor = android.content.res.ColorStateList.valueOf(0x223F8CFF)
+            setOnClickListener {
+                try { action() } catch (t: Throwable) {
+                    android.util.Log.e("TNT", "Tool failed: $label", t)
+                    MaterialAlertDialogBuilder(this@TNTLauncherActivity)
+                        .setTitle("工具暂时无法打开")
+                        .setMessage("$label\n${t.javaClass.simpleName}: ${t.message ?: "未知错误"}")
+                        .setPositiveButton("关闭", null).show()
+                }
+            }
+        }
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(13), dp(12), dp(12), dp(12))
+        }
+        row.addView(TextView(this).apply {
+            text = icon
+            textSize = 19f
+            gravity = Gravity.CENTER
+            setTextColor(0xFF1769D2.toInt())
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                setColor(0x1D3987E8)
+            }
+        }, LinearLayout.LayoutParams(dp(42), dp(42)))
+        val textColumn = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), 0, 0, 0)
+        }
+        textColumn.addView(TextView(this).apply {
+            text = label
+            textSize = 15f
+            setTextColor(if (Build.VERSION.SDK_INT >= 23) getColor(R.color.firstTextColor) else resources.getColor(R.color.firstTextColor))
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }, lp())
+        textColumn.addView(TextView(this).apply {
+            text = summary
+            textSize = 12f
+            setTextColor(if (Build.VERSION.SDK_INT >= 23) getColor(R.color.secondTextColor) else resources.getColor(R.color.secondTextColor))
+            setPadding(0, dp(3), 0, 0)
+        }, lp())
+        row.addView(textColumn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        row.addView(TextView(this).apply {
+            text = "›"; textSize = 25f; setTextColor(0xFF7F8EA3.toInt())
+        }, LinearLayout.LayoutParams(dp(22), ViewGroup.LayoutParams.WRAP_CONTENT))
+        card.addView(row)
+        root.addView(card, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            bottomMargin = dp(8)
+        })
+    }
+
     private fun lp() = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
     private fun dp(n: Int) = (n * resources.displayMetrics.density + 0.5f).toInt()
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
