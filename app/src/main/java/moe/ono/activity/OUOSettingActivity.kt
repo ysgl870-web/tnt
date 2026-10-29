@@ -216,11 +216,27 @@ open class OUOSettingActivity : BaseActivity() {
             val key = preference.key
             when (key) {
                 "tnt_tools" -> {
-                    startActivity(Intent(requireContext(), TNTLauncherActivity::class.java))
+                    try {
+                        startActivity(Intent(requireContext(), TNTLauncherActivity::class.java))
+                    } catch (t: Throwable) {
+                        android.util.Log.e("TNT", "无法启动光流工具中心", t)
+                        MaterialAlertDialogBuilder(requireContext())
+                            .setTitle("光流工具中心暂时无法打开")
+                            .setMessage("${t.javaClass.simpleName}: ${t.message ?: "未知错误"}")
+                            .setPositiveButton("关闭", null).show()
+                    }
                     return true
                 }
                 "tnt_presets" -> {
-                    startActivity(Intent(requireContext(), TNTPresetStudioActivity::class.java))
+                    try {
+                        startActivity(Intent(requireContext(), TNTPresetStudioActivity::class.java))
+                    } catch (t: Throwable) {
+                        android.util.Log.e("TNT", "无法启动预设工坊", t)
+                        MaterialAlertDialogBuilder(requireContext())
+                            .setTitle("预设工坊暂时无法打开")
+                            .setMessage("${t.javaClass.simpleName}: ${t.message ?: "未知错误"}")
+                            .setPositiveButton("关闭", null).show()
+                    }
                     return true
                 }
             }

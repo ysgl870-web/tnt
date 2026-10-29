@@ -16,6 +16,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import moe.ono.R
 import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
@@ -31,7 +32,7 @@ import javax.net.ssl.HttpsURLConnection
  * TNT local/cloud preset editor. Preset data is treated as untrusted text only:
  * this Activity intentionally does not dispatch arbitrary QQNT protocol packets.
  */
-class TNTPresetStudioActivity : AppCompatTransferActivity() {
+class TNTPresetStudioActivity : BaseActivity() {
     private data class Preset(
         val id: String = UUID.randomUUID().toString(),
         val name: String,
@@ -53,12 +54,39 @@ class TNTPresetStudioActivity : AppCompatTransferActivity() {
         if (uri != null) safely("导入预设失败") { importFrom(uri) }
     }
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
+    override fun doOnEarlyCreate(savedInstanceState: Bundle?, isInitializing: Boolean) {
+        super.doOnEarlyCreate(savedInstanceState, isInitializing)
+        setTheme(R.style.Theme_Ono)
+    }
+
+    override fun doOnCreate(savedInstanceState: Bundle?): Boolean {
+        super.doOnCreate(null)
         title = "TNT 预设工坊"
-        presets = loadPresets().toMutableList()
-        buildUi()
-        render()
+        try {
+            presets = loadPresets().toMutableList()
+            buildUi()
+            render()
+        } catch (t: Throwable) {
+            android.util.Log.e("TNT", "预设工坊初始化失败", t)
+            val fallback = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(20), dp(20), dp(20), dp(20))
+            }
+            fallback.addView(TextView(this).apply {
+                text = "预设工坊已进入安全模式"
+                textSize = 22f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+            }, lp())
+            fallback.addView(TextView(this).apply {
+                text = "页面初始化异常：${t.javaClass.simpleName}: ${t.message ?: "无详细信息"}"
+                textSize = 14f
+            }, lp())
+            fallback.addView(Button(this).apply {
+                text = "关闭"; isAllCaps = false; setOnClickListener { finish() }
+            }, lp())
+            setContentView(ScrollView(this).apply { isFillViewport = true; addView(fallback) })
+        }
+        return true
     }
 
     private fun buildUi() {
