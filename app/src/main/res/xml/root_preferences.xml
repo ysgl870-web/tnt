@@ -36,7 +36,7 @@
 
         <Preference
             app:key="tnt_tools"
-            app:title="TNT 工具中心"
+            app:title="光流工具中心"
             app:summary="快捷文案、JSON、链接分析与诊断" />
 
         <Preference
