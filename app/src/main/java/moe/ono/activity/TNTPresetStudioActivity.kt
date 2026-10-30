@@ -117,7 +117,7 @@ class TNTPresetStudioActivity : BaseActivity() {
 
         search = EditText(this).apply {
             hint = "搜索名称、内容或包名"
-            singleLine = true
+            setSingleLine(true)
             addTextChangedListener(object : android.text.TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
                 override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = render()
@@ -129,7 +129,7 @@ class TNTPresetStudioActivity : BaseActivity() {
         outer.addView(status, lp())
         val scroll = ScrollView(this)
         listRoot = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        scroll.addView(listRoot, ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        scroll.addView(listRoot, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         outer.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(outer)
     }
@@ -198,8 +198,8 @@ class TNTPresetStudioActivity : BaseActivity() {
     }
 
     private fun editPreset(old: Preset?) {
-        val name = EditText(this).apply { hint = "预设名称（必填）"; singleLine = true; setText(old?.name.orEmpty()) }
-        val pkg = EditText(this).apply { hint = "包名/来源（可选）"; singleLine = true; setText(old?.packageName.orEmpty()) }
+        val name = EditText(this).apply { hint = "预设名称（必填）"; setSingleLine(true); setText(old?.name.orEmpty()) }
+        val pkg = EditText(this).apply { hint = "包名/来源（可选）"; setSingleLine(true); setText(old?.packageName.orEmpty()) }
         val content = EditText(this).apply {
             hint = "文本、JSON、Ark 草稿或 HEX 样例"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
