@@ -1,10 +1,10 @@
 <resources>
     <string name="resources_inject_state">Resources injection success</string>
-    <string name="app_name">TNT 模块</string>
+    <string name="app_name">TNT · 光流工具箱</string>
     <string name="packethelper">PacketHelper</string>
     <string name="title_activity_stub">StubActivity</string>
     <string name="ouom_pub">\@ouom_pub</string>
-    <string name="xposeddescription">TNT QQ 增强模块；二次开发作者：亦是光流；基于 cwuom/ono，遵循 GPL-3.0</string>
+    <string name="xposeddescription">TNT（光流）QQNT Android 模块，专注使用体验优化、实用工具与模块化扩展。二次开发作者：亦是光流。基于 ONO 开源项目，遵循 GPL-3.0 并保留上游及贡献者版权声明。</string>
     <string name="fake_file">Fake File</string>
     <string name="ono_need_find_method">ONO需要寻找被混淆的方法</string>
     <string name="click_to_find_method">查找</string>
