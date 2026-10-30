@@ -38,7 +38,7 @@
         <activity-alias
             android:name=".activity.MainActivityAlias"
             android:exported="true"
-            android:icon="@drawable/ic_ouo"
+            android:icon="@mipmap/ic_launcher"
             android:label="@string/app_name"
             android:targetActivity=".activity.TNTLauncherActivity"
             android:theme="@style/Theme.MaiTungTMDesign.DayNight">
