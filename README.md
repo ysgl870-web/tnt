@@ -1,39 +1,72 @@
-# TNT 模块（QQNT 增强）
+# TNT · 光流工具箱
 
 **二次开发作者：亦是光流**  
 **上游项目：[cwuom/ono](https://github.com/cwuom/ono)**  
+**项目仓库：[ysgl870-web/tnt](https://github.com/ysgl870-web/tnt)**  
 **许可证：GPL-3.0**
 
-TNT 基于 ONO 的公开源码继续开发，保留上游及贡献者的版权、许可证与免责声明。当前目标为 Android 10+ 的 QQNT 环境，实际兼容性以具体 QQ 版本和 Xposed/LSPosed 加载器测试结果为准。
+TNT 是基于 ONO 公开源码继续开发的 QQNT Android 模块。项目保留上游及贡献者的版权、许可证与免责声明；亦是光流的署名仅说明 TNT 二次开发工作，不替代上游版权。
 
-## TNT 新增能力
+## 项目方向
 
-- TNT 启动工具页：快捷文案、JSON 校验/美化、链接/Scheme 分析、文本字节统计、Emoji 复制和环境诊断。
-- 预设工坊：本地创建/编辑/删除/搜索、黑壳/AWA JSON 兼容导入导出、分隔符记录识别、HEX/Base64 工具。
-- 云预设：用户手动输入 HTTPS JSON URL，GET-only、限制响应大小、不跟随重定向、检查私网解析；预览确认后才写入本地。
-- Ark Bot JSON 离线草稿构建器：用于公开 QQ Bot API 格式草稿，不代表 QQNT 私有协议格式。
-- 黑壳/AWA 代码差异和移植研究文档。
+- QQNT 使用体验优化与模块化扩展。
+- 常用本地工具、预设管理与开发诊断。
+- 统一、清晰、适配手机的操作界面。
+- 尽量减少隐式网络行为；涉及分享时使用 Android 可见系统分享面板。
+
+## 主要功能
+
+### QQNT 模块能力
+
+现有源码包含聊天与消息、开发者辅助、娱乐、资料卡、Sigma 和 BugFix 等功能。当前模块类清单包括：
+
+- 聊天：Bilibili 自动转播放卡、快捷菜单、聊天滚动记忆、撤回相关处理、消息加密配置、小程序跳转、气泡重定向、自消息处理、贴纸入口。
+- 开发者：Cookie/Bkn 工具、VConsole 注入、Scheme 跳转、Hook Codec、消息查询、PacketHelper 入口、QSign Hook。
+- 娱乐：文本过滤、好友 UIN 选择、群主显示、文本修改、表情响应等。
+- 资料卡与 Sigma：资料卡菜单、消息追踪、昵称预测。
+- BugFix：Markdown、QQ 崩溃和长文本显示修复。
+
+具体兼容性与行为以目标 QQ 版本及 Xposed/LSPosed 实机测试为准。
+
+### TNT 工具台
+
+- 搜索、分类筛选和长按收藏。
+- AWA/黑壳预设工坊：本地创建、编辑、删除、搜索、批量导入/导出与云目录预览。
+- JSON 美化/校验及递归字段差异比较。
+- QQ Scheme/URL 本地分析、URL/Base64 编解码。
+- 文本、Unicode 代码点与 UTF-8 字节统计。
+- SHA-256 本地摘要。
+- 快捷文案保存与复制。
+- Android 系统分享助手。
+- 环境诊断：Android/API、ABI、QQ 版本及模块版本。
+
+### 预设兼容
+
+TNT 与 AWA/黑壳预设库的核心交换字段为 `name` 和 `content`，可选 `package_name`。同时兼容黑壳历史分隔符：
+
+```text
+*awa_pkg_name_pkg_content_split*
+```
+
+预设内容被视为不可信文本/JSON，不会在导入后当作脚本执行。
+
+## AWA / 黑壳研究
+
+仓库 docs 中提供 APK 静态逆向研究与 TNT 功能映射总结。研究材料将静态确认、功能推断与未验证运行行为分开说明。
+
+**重要边界：** TNT 不移植任意 RAW/协议注入、伪造 UIN/Token/签名或循环重复群发。不会把 APK 中发现的硬编码凭证或未验证第三方接口当作可复用功能。普通分享优先通过 Android 系统分享面板或公开授权接口。
 
 ## 本地构建
 
-需要 JDK 17 和 Android SDK Platform 35 / Build Tools 35：
+需要 JDK 17 与 Android SDK Platform 35 / Build Tools 35：
 
-    ./gradlew --no-daemon assembleRelease
+```bash
+./gradlew --no-daemon assembleRelease
+```
 
-APK 输出名：TNT-Module-<version>.apk。Release 默认签名配置需由使用者检查；使用自己的签名密钥发布。修改上游工程后请先执行 git diff 并检查新增权限。
+APK 输出名：`TNT-Module-<version>.apk`。Release 签名由构建者自行配置；发布前应确认签名密钥一致。修改上游工程后请检查 `git diff`、新增权限和依赖来源。
 
-## 黑壳发包与预设研究
+## 作者描述
 
-- [云预设目录格式与安全说明](docs/云预设目录格式与安全说明.md)
-- [云预设示例 JSON](examples/cloud-presets.example.json)
+TNT（光流）QQNT Android 模块，专注使用体验优化、实用工具与模块化扩展。二次开发作者：亦是光流。基于 ONO 开源项目，遵循 GPL-3.0 并保留上游及贡献者版权声明。
 
-- [黑壳/AWA 发包工作台与预设机制](docs/TNT_黑壳预设与发包机制研究.md)
-- [TNT V3 使用与构建说明](docs/TNT_V3_使用与构建说明.md)
-
-## 发包功能的设计边界
-
-TNT 将预设作为数据处理，支持预览、验证、格式化和导入导出。当前版本没有任意 RAW/协议注入、伪造 UIN/Token/签名或循环重复发送。普通聊天功能优先走可见的 QQ 原生 UI 或官方已授权接口。
-
-## 上游说明
-
-本项目是基于 GPL-3.0 工程的衍生开发版本。分发时应保留上游授权信息、标注变更，并按 GPL-3.0 提供相应源代码。作者署名仅描述 TNT 二次开发工作，不替代上游代码及其他贡献者的版权。
