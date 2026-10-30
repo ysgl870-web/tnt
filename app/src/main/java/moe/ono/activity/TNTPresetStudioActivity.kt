@@ -73,6 +73,7 @@ class TNTPresetStudioActivity : BaseActivity() {
             val outer = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(14), dp(12), dp(14), dp(18))
+                setBackgroundColor(0xFF071329.toInt())
             }
             val hero = MaterialCardView(this).apply {
                 radius = dp(20).toFloat()
@@ -125,7 +126,11 @@ class TNTPresetStudioActivity : BaseActivity() {
             })
         }
         outer.addView(search, lp())
-        status = TextView(this).apply { textSize = 12f; setPadding(0, dp(4), 0, dp(4)) }
+        status = TextView(this).apply {
+            textSize = 12f
+            setTextColor(0xFF8FA4C4.toInt())
+            setPadding(dp(2), dp(6), dp(2), dp(6))
+        }
         outer.addView(status, lp())
         val scroll = ScrollView(this)
         listRoot = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -556,12 +561,12 @@ class TNTPresetStudioActivity : BaseActivity() {
         val group = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(2), dp(8), dp(2), dp(5)) }
         group.addView(TextView(this).apply {
             text = title; textSize = 17f
-            setTextColor(if (android.os.Build.VERSION.SDK_INT >= 23) getColor(R.color.firstTextColor) else resources.getColor(R.color.firstTextColor))
+            setTextColor(0xFFF2F6FF.toInt())
             setTypeface(typeface, android.graphics.Typeface.BOLD)
         }, lp())
         group.addView(TextView(this).apply {
             text = summary; textSize = 12f
-            setTextColor(if (android.os.Build.VERSION.SDK_INT >= 23) getColor(R.color.secondTextColor) else resources.getColor(R.color.secondTextColor))
+            setTextColor(0xFF9BAAC2.toInt())
         }, lp())
         root.addView(group, lp())
     }
@@ -572,7 +577,7 @@ class TNTPresetStudioActivity : BaseActivity() {
             cardElevation = 0f
             strokeWidth = dp(1)
             strokeColor = 0x223F6FA5
-            setCardBackgroundColor(if (android.os.Build.VERSION.SDK_INT >= 23) getColor(R.color.card_bg) else resources.getColor(R.color.card_bg))
+            setCardBackgroundColor(0xFF111F36.toInt())
             isClickable = true
             isFocusable = true
             rippleColor = android.content.res.ColorStateList.valueOf(0x223F8CFF)
