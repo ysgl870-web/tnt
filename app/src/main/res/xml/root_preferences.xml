@@ -36,8 +36,8 @@
 
         <Preference
             app:key="tnt_tools"
-            app:title="光流工具中心"
-            app:summary="快捷文案、JSON、链接分析与诊断" />
+            app:title="TNT 工具台"
+            app:summary="搜索、收藏与本地工具集合" />
 
         <Preference
             app:key="tnt_presets"
