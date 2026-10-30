@@ -597,8 +597,8 @@ class TNTLauncherActivity : BaseActivity() {
                     val b = JSONTokener(right.text.toString()).nextValue()
                     val am = linkedMapOf<String, String>()
                     val bm = linkedMapOf<String, String>()
-                    flattenJson(a, "$", am)
-                    flattenJson(b, "$", bm)
+                    flattenJson(a, "\$", am)
+                    flattenJson(b, "\$", bm)
                     val keys = (am.keys + bm.keys).toSortedSet()
                     val report = StringBuilder()
                     var added = 0
@@ -648,7 +648,7 @@ class TNTLauncherActivity : BaseActivity() {
                 while (iterator.hasNext()) keys.add(iterator.next())
                 if (keys.isEmpty()) output[path] = "{}"
                 keys.sorted().forEach { key ->
-                    flattenJson(value.opt(key), if (path == "$") "$." + key else path + "." + key, output)
+                    flattenJson(value.opt(key), if (path == "\$") "\$." + key else path + "." + key, output)
                 }
             }
             is JSONArray -> {
