@@ -248,13 +248,13 @@ class TNTLauncherActivity : BaseActivity() {
         body.addView(label)
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val actions = listOf(
-            Triple("预设工坊", "模板与云目录", "▣") {
+            Triple("预设工坊", "模板与云目录", {
                 startActivity(Intent(this, TNTPresetStudioActivity::class.java))
-            },
-            Triple("模块设置", "功能开关与配置", "⚙") {
+            }),
+            Triple("模块设置", "功能开关与配置", {
                 startActivity(Intent(this, OUOSettingActivity::class.java))
-            },
-            Triple("关于 TNT", "作者与开源许可", "ⓘ") { aboutTool() }
+            }),
+            Triple("关于 TNT", "作者与开源许可", { aboutTool() })
         )
         actions.forEach { item ->
             val card = MaterialCardView(this).apply {
