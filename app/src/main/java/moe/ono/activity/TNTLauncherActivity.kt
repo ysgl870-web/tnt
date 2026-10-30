@@ -642,7 +642,7 @@ class TNTLauncherActivity : BaseActivity() {
                             }
                             old != fresh -> {
                                 changed++
-                                report.append("~ ").append(key).append('\n  旧: ").append(old)
+                                report.append("~ ").append(key).append("\n  旧: ").append(old)
                                     .append("\n  新: ").append(fresh).append('\n')
                             }
                         }
