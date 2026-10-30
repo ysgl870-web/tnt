@@ -8,7 +8,7 @@
         android:name=".util.hookstatus.ModuleAppImpl"
         android:allowBackup="true"
         android:description="@string/xposeddescription"
-        android:icon="@drawable/ic_ouo"
+        android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
         tools:targetApi="31">
