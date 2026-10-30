@@ -472,10 +472,34 @@ class TNTLauncherActivity : BaseActivity() {
             minLines = 5
             setText(launcherPrefs.getString("last_phrase", "").orEmpty())
         }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(5), dp(4), dp(5), 0)
+            addView(input, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(160)))
+            addView(TextView(this@TNTLauncherActivity).apply {
+                text = "从已保存文案中选择  ›"
+                textSize = 12f
+                gravity = Gravity.CENTER_VERTICAL
+                setTextColor(0xFF9FC8FF.toInt())
+                setPadding(dp(8), dp(10), dp(8), dp(8))
+                setOnClickListener {
+                    val arr = runCatching { JSONArray(launcherPrefs.getString("saved_phrases", "[]")) }.getOrDefault(JSONArray())
+                    val values = (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotBlank() }
+                    if (values.isEmpty()) {
+                        toast("还没有保存的文案")
+                    } else {
+                        MaterialAlertDialogBuilder(this@TNTLauncherActivity)
+                            .setTitle("选择已保存文案")
+                            .setItems(values.toTypedArray()) { _, which -> input.setText(values[which]) }
+                            .setNegativeButton("关闭", null).show()
+                    }
+                }
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
         val dialog = MaterialAlertDialogBuilder(this)
             .setTitle("快捷文案")
             .setMessage("文案保存在本机，不会自动发送。")
-            .setView(input)
+            .setView(box)
             .setNegativeButton("关闭", null)
             .setNeutralButton("保存", null)
             .setPositiveButton("复制", null)
