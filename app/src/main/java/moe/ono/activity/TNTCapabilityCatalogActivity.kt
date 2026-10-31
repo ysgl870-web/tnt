@@ -172,7 +172,14 @@ class TNTCapabilityCatalogActivity : BaseActivity() {
             row.addView(TextView(this).apply {
                 text = item.status
                 textSize = 10f
-                setTextColor(0xFFFFD27D.toInt())
+                setTextColor(
+                    when {
+                        item.status.contains("已具备") -> 0xFF7ED6B0.toInt()
+                        item.status.contains("不移植") || item.status.contains("暂不移植") ||
+                            item.status.contains("默认不启用") -> 0xFFFFA59E.toInt()
+                        else -> 0xFFFFD27D.toInt()
+                    }
+                )
                 setPadding(dp(7), dp(5), dp(7), dp(5))
                 background = panel(0xFF1B2A40.toInt(), 0xFF40516D.toInt(), 9)
             })

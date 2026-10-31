@@ -67,8 +67,8 @@ def inspect_apk(path):
             apk = Path(temp.name)
     try:
         with zipfile.ZipFile(apk) as archive:
-            names = [n for n in archive.namelist() if re.fullmatch(r"classes(?:\d+)?\\.dex", Path(n).name)]
-            names.sort(key=lambda n: 1 if Path(n).name == "classes.dex" else int(re.search(r"(\\d+)", n).group(1)))
+            names = [n for n in archive.namelist() if re.fullmatch(r"classes(?:\d+)?\.dex", Path(n).name)]
+            names.sort(key=lambda n: 1 if Path(n).name == "classes.dex" else int(re.search(r"(\d+)", n).group(1)))
             classes, dex_stats = set(), []
             for name in names:
                 raw = archive.read(name)
