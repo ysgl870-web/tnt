@@ -21,6 +21,10 @@
             android:exported="false"
             android:theme="@style/Theme.Ono" />
         <activity
+            android:name=".activity.TNTCapabilityCatalogActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Ono" />
+        <activity
             android:name=".activity.TNTLauncherActivity"
             android:exported="true"
             android:theme="@style/Theme.Ono" />

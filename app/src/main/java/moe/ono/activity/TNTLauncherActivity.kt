@@ -325,6 +325,9 @@ class TNTLauncherActivity : BaseActivity() {
         ToolEntry("preset", "AWA / 黑壳预设工坊", "本地预设、批量导入导出、云目录预览与校验", "常用", "▣") {
             startActivity(Intent(this, TNTPresetStudioActivity::class.java))
         },
+        ToolEntry("module_catalog", "AWA / 黑壳能力清单", "静态研究结果、功能线索与 TNT 适配状态", "开发辅助", "◇") {
+            startActivity(Intent(this, TNTCapabilityCatalogActivity::class.java))
+        },
         ToolEntry("phrase", "快捷文案", "管理常用文本，快速复制或交给系统分享", "常用", "✎") { phraseTool() },
         ToolEntry("share", "系统分享助手", "使用 Android Sharesheet 分享文本与链接", "常用", "↗") { nativeShare() },
         ToolEntry("json", "JSON 美化 / 校验", "本地解析、格式化与结构检查", "内容工具", "{ }") { jsonTool() },
