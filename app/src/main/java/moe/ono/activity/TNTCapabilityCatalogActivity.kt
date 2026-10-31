@@ -199,7 +199,7 @@ class TNTCapabilityCatalogActivity : BaseActivity() {
         }
         if (shown.isEmpty()) {
             list.addView(TextView(this).apply {
-                text = "没有找到匹配的功能线索。"
+                text = "没有找到匹配的功能线索，请调整搜索词或切换分类。"
                 gravity = Gravity.CENTER
                 setTextColor(0xFF8FA1BC.toInt())
                 setPadding(dp(10), dp(28), dp(10), dp(28))
