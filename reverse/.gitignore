@@ -1,0 +1,4 @@
+# Local-only APK inputs and generated reverse-engineering output.
+/input/
+/output/
+/cache/
