@@ -71,3 +71,9 @@ APK 输出名：`TNT-Module-<version>.apk`。Release 签名由构建者自行配
 
 TNT（光流）QQNT Android 模块，专注使用体验优化、实用工具与模块化扩展。二次开发作者：亦是光流。基于 ONO 开源项目，遵循 GPL-3.0 并保留上游及贡献者版权声明。
 
+### AWA APK 反编译复现
+
+仓库提供 tools/reverse_awa_apk.sh，可使用 JADX 与 Apktool 对本地 awa.apk 或只包含一个 APK 的 ZIP 做可复现静态反编译。输入和输出默认保存在 reverse/input 与 reverse/output（均已忽略）。具体工具版本、命令与当前 AWA 附件边界见 [AWA 反编译工具与复现流程](docs/AWA_源码逆向工具与复现流程_2026-11-01.md)。
+
+注意：当前 awa-main.zip 只有编译后的 APK，不含原始工程或许可证；反编译输出不是原始源码，未经授权和许可证核实不会并入 TNT 主源码目录。
+
