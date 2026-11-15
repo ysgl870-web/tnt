@@ -220,7 +220,7 @@ open class OUOSettingActivity : BaseActivity() {
                     return super.onPreferenceTreeClick(preference)
                 }
                 "github" -> {
-                    jump(requireContext(), "https://github.com/ysgl870-web/tnt/tree/tnt-next/ono-base")
+                    jump(requireContext(), "https://github.com/ysgl870-web/tnt/tree/main")
                     return super.onPreferenceTreeClick(preference)
                 }
                 "build_time", "build_uuid", "version","prek_enable_log", "hook_priority" -> {

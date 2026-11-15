@@ -177,7 +177,7 @@ class MainActivity : AppCompatTransferActivity() {
                 jump(this, "https://t.me/ouom_pub")
             }
             R.id.cv_github -> {
-                jump(this, "https://github.com/ysgl870-web/tnt/tree/tnt-next/ono-base")
+                jump(this, "https://github.com/ysgl870-web/tnt/tree/main")
             }
         }
     }
@@ -236,7 +236,7 @@ class MainActivity : AppCompatTransferActivity() {
             R.id.menu_main_about -> {
                 MaterialAlertDialogBuilder(this)
                     .setTitle("TNT · 光流")
-                    .setMessage("TNT · QQNT Android 模块\n二次开发：亦是光流\n基于 ONO 开源项目（GPL-3.0）\n源码：https://github.com/ysgl870-web/tnt/tree/tnt-next/ono-base")
+                    .setMessage("TNT · QQNT Android 模块\n二次开发：亦是光流\n基于 ONO 开源项目（GPL-3.0）\n源码：https://github.com/ysgl870-web/tnt/tree/main")
                     .show()
             }
             else -> {

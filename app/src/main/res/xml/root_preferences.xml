@@ -3,7 +3,7 @@
     xmlns:app="http://schemas.android.com/apk/res-auto">
     <PreferenceCategory
         android:key="settings_category"
-        android:title="设定">
+        android:title="功能中心">
         <Preference
             app:key="聊天与消息"
             app:icon="@drawable/ic_twotone_message_24"
@@ -38,7 +38,7 @@
 
     <PreferenceCategory
         android:key="debug_category"
-        android:title="调试">
+        android:title="调试与诊断">
 
         <rikka.material.preference.MaterialSwitchPreference
             android:icon="@drawable/ic_baseline_border_color_24"
@@ -54,7 +54,7 @@
 
     <PreferenceCategory
         android:key="compatibility_category"
-        android:title="兼容">
+        android:title="兼容性">
 
         <rikka.preference.SimpleMenuPreference
             android:defaultValue="1"

@@ -2,7 +2,7 @@ name: Android CI
 
 on:
   push:
-    branches: [ main, "tnt-next/ono-base" ]
+    branches: [ main ]
     paths-ignore:
       - '**/*.md'
       - '**/*.txt'
@@ -27,7 +27,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    if: ${{ !startsWith(github.event.head_commit.message, '[skip ci]') && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/tnt-next/ono-base' || github.event_name == 'pull_request') }}
+    if: ${{ !startsWith(github.event.head_commit.message, '[skip ci]') && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -100,12 +100,6 @@ jobs:
           echo "::warning::Building a test Release variant signed with the Android debug key."
           ./gradlew assembleRelease --warning-mode all --stacktrace
 
-      - name: Build Release for tnt-next/ono-base
-        if: github.event_name == 'push' && github.ref == 'refs/heads/tnt-next/ono-base'
-        run: |
-          echo "Building the TNT development branch with the Android debug key."
-          ./gradlew assembleRelease --warning-mode all --stacktrace
-
       - name: Upload PR APK
         if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
@@ -119,14 +113,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ono-release-apk
-          path: app/build/outputs/apk/release/**/*.apk
-          if-no-files-found: error
-
-      - name: Upload TNT development APK
-        if: github.event_name == 'push' && github.ref == 'refs/heads/tnt-next/ono-base'
-        uses: actions/upload-artifact@v4
-        with:
-          name: tnt-next-apk
           path: app/build/outputs/apk/release/**/*.apk
           if-no-files-found: error
 
