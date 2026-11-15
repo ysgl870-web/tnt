@@ -235,6 +235,18 @@ private fun normalizeImageUrl(raw: String): String? = runCatching {
     uri.buildUpon().fragment(null).build().toString().take(4096)
 }.getOrNull()
 
+private fun inspectUrlModel(value: Any?, source: String, accept: (Any?, String) -> Unit) {
+    if (value == null || value is String || value is Uri || value is Number || value is Boolean) return
+    value.javaClass.methods.filter { it.parameterTypes.isEmpty() &&
+        Regex("(uri|url|source|path|origin|image)", RegexOption.IGNORE_CASE).containsMatchIn(it.name) }
+        .take(16).forEach { method -> runCatching { accept(method.invoke(value), "$source.${method.name}") } }
+    value.javaClass.declaredFields.filter {
+        Regex("(uri|url|source|path|origin|image)", RegexOption.IGNORE_CASE).containsMatchIn(it.name)
+    }.take(32).forEach { field ->
+        runCatching { field.isAccessible = true; accept(field.get(value), "$source.${field.name}") }
+    }
+}
+
 private object InspectorTree {
     private const val MAX_NODES = 420
     private const val MAX_DEPTH = 42
@@ -349,9 +361,11 @@ private object InspectorTree {
 
         accept(view.contentDescription?.toString(), "contentDescription")
         accept(view.tag, "tag")
+        inspectUrlModel(view.tag, "tag", ::accept)
         if (view is ImageView) {
             val drawable = view.drawable
             accept(drawable?.toString(), "drawable")
+            inspectUrlModel(drawable, "drawable", ::accept)
             if (drawable != null) {
                 drawable.javaClass.methods.filter { it.parameterTypes.isEmpty() &&
                     Regex("(uri|url|source|path)", RegexOption.IGNORE_CASE).containsMatchIn(it.name) }
@@ -418,7 +432,19 @@ private object InspectorTree {
             if (cardLike || Regex("(ark|app|meta|prompt|view|config|jumpUrl|qqdocurl|schema)", RegexOption.IGNORE_CASE).containsMatchIn(parsed)) found.add(parsed)
         }
         if (view is TextView && !view.text.isNullOrBlank()) accept(view.text.toString())
+        fun inspectCardObject(value: Any?) {
+            if (value == null || value is String || value is Number || value is Boolean) return
+            value.javaClass.declaredFields.filter {
+                Regex("(ark|card|json|payload|extra|meta|struct|share)", RegexOption.IGNORE_CASE).containsMatchIn(it.name)
+            }.take(32).forEach { field ->
+                runCatching { field.isAccessible = true; accept(field.get(value)) }
+            }
+            value.javaClass.methods.filter {
+                it.parameterTypes.isEmpty() && Regex("(ark|card|json|payload|extra|meta|struct|share)", RegexOption.IGNORE_CASE).containsMatchIn(it.name)
+            }.take(12).forEach { getter -> runCatching { accept(getter.invoke(value)) } }
+        }
         accept(view.tag)
+        inspectCardObject(view.tag)
         accept(view.contentDescription)
         var type: Class<*>? = view.javaClass
         var depth = 0
