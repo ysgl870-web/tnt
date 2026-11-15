@@ -354,6 +354,7 @@ private class InspectorOverlay private constructor(
         toolbar.addView(toolButton("保存链接") { saveCurrentLinks() }, buttonParams())
         toolbar.addView(toolButton("链接记录") { showLinkHistory() }, buttonParams())
         toolbar.addView(toolButton("复制结构") { copyTree() }, buttonParams())
+        toolbar.addView(toolButton("停用探测") { disableFeature() }, buttonParams())
         toolbar.addView(toolButton("关闭") { close() }, buttonParams())
     }
 
@@ -528,6 +529,16 @@ private class InspectorOverlay private constructor(
         copyText(activity, "QQ控件树", JSONObject().put("count", nodes.size).put("nodes", array).toString(2))
     }
 
+    private fun disableFeature() {
+        runCatching {
+            ConfigManager.getDefaultConfig().edit()
+                .putBoolean(Constants.PrekXXX + "开发者选项/QQ界面控件探测器", false)
+                .apply()
+        }
+        QQInspectorRuntime.detach(activity)
+        Toast.makeText(activity, "控件探测器已停用，可在 TNT 设置中重新开启", Toast.LENGTH_LONG).show()
+    }
+
     private fun close() {
         (parent as? ViewGroup)?.removeView(this)
         QQInspectorRuntime.attach(activity)
@@ -654,7 +665,7 @@ private object QQInspectorLinks {
     private const val STORAGE_KEY = "tnt_qq_inspector_links_v2"
     private const val MAX_ROWS = 100
     private val lock = Any()
-    private val recent = LinkedHashSet<String>()
+    private val recent = LinkedHashMap<String, Long>()
     private const val FEATURE_KEY = "开发者选项/QQ界面控件探测器"
 
     private fun enabled(): Boolean = runCatching {
@@ -759,7 +770,7 @@ private object QQInspectorLinks {
 
         for (name in listOf("android.webkit.WebViewClient", "com.tencent.smtt.sdk.WebViewClient")) {
             val clazz = runCatching { classLoader.loadClass(name) }.getOrNull() ?: continue
-            listOf("onPageStarted", "shouldOverrideUrlLoading").forEach { methodName ->
+            listOf("onPageStarted", "onPageFinished", "shouldOverrideUrlLoading").forEach { methodName ->
                 runCatching {
                     XposedBridge.hookAllMethods(clazz, methodName, object : XC_MethodHook() {
                         override fun beforeHookedMethod(param: MethodHookParam) {
@@ -799,8 +810,11 @@ private object QQInspectorLinks {
         val safe = sanitize(raw) ?: return
         val fingerprint = "$kind|$safe"
         synchronized(lock) {
-            if (!recent.add(fingerprint)) return
-            while (recent.size > 240) recent.remove(recent.first())
+            val now = System.currentTimeMillis()
+            val previous = recent[fingerprint]
+            if (previous != null && now - previous < 900L) return
+            recent[fingerprint] = now
+            while (recent.size > 240) recent.remove(recent.keys.first())
             runCatching {
                 val old = JSONArray(ConfigManager.cGetString(STORAGE_KEY, "[]"))
                 val next = JSONArray()
@@ -808,7 +822,7 @@ private object QQInspectorLinks {
                 for (index in first until old.length()) old.optJSONObject(index)?.let { next.put(it) }
                 next.put(
                     JSONObject()
-                        .put("time", System.currentTimeMillis())
+                        .put("time", now)
                         .put("kind", kind.take(32))
                         .put("source", source.take(100))
                         .put("url", safe)
