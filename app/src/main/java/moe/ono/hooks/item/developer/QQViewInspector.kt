@@ -132,15 +132,22 @@ private object QQInspectorRuntime {
             try {
                 app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
                     override fun onActivityCreated(activity: Activity, state: Bundle?) {
-                        if (isEnabled()) QQInspectorLinks.captureActivity(activity)
+                        if (isEnabled()) {
+                            runCatching { QQInspectorLinks.captureActivity(activity) }
+                                .onFailure { Logger.w("TNT Activity URL scan failed: " + it.javaClass.simpleName) }
+                        }
                     }
                     override fun onActivityStarted(activity: Activity) = Unit
                     override fun onActivityResumed(activity: Activity) {
-                        if (isEnabled()) {
-                            QQInspectorLinks.captureActivity(activity)
-                            attach(activity)
-                        } else {
-                            detach(activity)
+                        runCatching {
+                            if (isEnabled()) {
+                                QQInspectorLinks.captureActivity(activity)
+                                attach(activity)
+                            } else {
+                                detach(activity)
+                            }
+                        }.onFailure {
+                            Logger.e("TNT inspector Activity resume failed", it)
                         }
                     }
                     override fun onActivityPaused(activity: Activity) = Unit
@@ -499,11 +506,18 @@ private class InspectorOverlay private constructor(
     }
 
     private fun refresh() {
-        QQInspectorLinks.captureActivity(activity)
-        nodes = InspectorTree.collect(activity)
-        boxes.setNodes(nodes)
-        buildToolbar()
-        Toast.makeText(activity, "已重新扫描 ${nodes.size} 个控件", Toast.LENGTH_SHORT).show()
+        runCatching {
+            QQInspectorLinks.captureActivity(activity)
+            InspectorTree.collect(activity)
+        }.onSuccess { refreshed ->
+            nodes = refreshed
+            boxes.setNodes(nodes)
+            buildToolbar()
+            Toast.makeText(activity, "已重新扫描 ${nodes.size} 个控件", Toast.LENGTH_SHORT).show()
+        }.onFailure {
+            Logger.e("TNT inspector refresh failed", it)
+            Toast.makeText(activity, "扫描失败：${it.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun saveCurrentLinks() {
