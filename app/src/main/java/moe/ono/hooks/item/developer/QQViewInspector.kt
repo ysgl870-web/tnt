@@ -849,6 +849,10 @@ private class InspectorOverlay private constructor(
     private fun togglePickMode() {
         pickMode = !pickMode
         boxes.setPickMode(pickMode)
+        if (!pickMode && multiSelect) {
+            multiSelect = false
+            boxes.setMultiSelect(false)
+        }
         buildToolbar()
         Toast.makeText(
             activity,
@@ -871,7 +875,7 @@ private class InspectorOverlay private constructor(
         val rules = InspectorControlState.clearPersistentRules()
         val count = InspectorControlState.restoreAll()
         refresh()
-        Toast.makeText(activity, "已恢复隐藏/移除/禁用控件（本次 $count 个，持续规则 $rules 条）", Toast.LENGTH_LONG).show()
+        Toast.makeText(activity, "已恢复隐藏/移除/禁用控件（本次 $count 个，持续规则 $rules 条）", Toast.LENGTH_SHORT).show()
     }
 
     private fun clearPersistentRules() {
@@ -900,7 +904,7 @@ private class InspectorOverlay private constructor(
             Toast.makeText(activity, "已重新扫描 ${nodes.size} 个控件", Toast.LENGTH_SHORT).show()
         }.onFailure {
             Logger.e("TNT inspector refresh failed", it)
-            Toast.makeText(activity, "扫描失败：${it.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+            Toast.makeText(activity, "扫描失败：${it.javaClass.simpleName}", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -909,7 +913,7 @@ private class InspectorOverlay private constructor(
         val visibleNodes = InspectorTree.collect(activity)
         val discovered = (activityLinks + visibleNodes.flatMap { it.links }).distinct()
         if (discovered.isEmpty()) {
-            Toast.makeText(activity, "当前 Activity 暂未发现 Intent 或 WebView 链接", Toast.LENGTH_LONG).show()
+            Toast.makeText(activity, "当前 Activity 暂未发现 Intent 或 WebView 链接", Toast.LENGTH_SHORT).show()
             return
         }
         discovered.forEach { QQInspectorLinks.add("MANUAL_SAVE", it, "手动保存当前页面") }
@@ -958,7 +962,7 @@ private class InspectorOverlay private constructor(
             .setMessage("即将打开以下链接：\\n$url\\n\\n请确认链接来源可信。")
             .setPositiveButton("确认跳转") { _, _ ->
                 runCatching { activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
-                    .onFailure { Toast.makeText(activity, "无法打开链接：${it.javaClass.simpleName}", Toast.LENGTH_LONG).show() }
+                    .onFailure { Toast.makeText(activity, "无法打开链接：${it.javaClass.simpleName}", Toast.LENGTH_SHORT).show() }
             }
             .setNegativeButton("取消", null)
             .show()
@@ -1134,7 +1138,7 @@ private class InspectorOverlay private constructor(
                     "隐藏此控件" -> {
                         if (canModify(node) && InspectorControlState.hide(node.view)) {
                             if (node.view.id != View.NO_ID) InspectorControlState.addPersistentRule(activity, node.view, "hide")
-                            Toast.makeText(activity, "控件已隐藏；关闭探测器后仍保持隐藏，可在探测界面点“恢复控件”还原", Toast.LENGTH_LONG).show()
+                            Toast.makeText(activity, "控件已隐藏；关闭探测器后仍保持隐藏，可在探测界面点“恢复控件”还原", Toast.LENGTH_SHORT).show()
                             refresh()
                         } else Toast.makeText(activity, "此控件当前不可隐藏", Toast.LENGTH_SHORT).show()
                     }
@@ -1143,7 +1147,7 @@ private class InspectorOverlay private constructor(
                             val ruleSaved = node.view.id != View.NO_ID &&
                                 InspectorControlState.addPersistentRule(activity, node.view, "remove")
                             if (InspectorControlState.hide(node.view)) {
-                                Toast.makeText(activity, if (ruleSaved) "控件已移除；关闭探测器后仍保持移除，可在探测界面恢复" else "控件已隐藏；无资源 ID，跨页面持久恢复能力有限", Toast.LENGTH_LONG).show()
+                                Toast.makeText(activity, if (ruleSaved) "控件已移除；关闭探测器后仍保持移除，可在探测界面恢复" else "控件已隐藏；无资源 ID，跨页面持久恢复能力有限", Toast.LENGTH_SHORT).show()
                             refresh()
                             } else Toast.makeText(activity, "此控件当前不可移除", Toast.LENGTH_SHORT).show()
                         } else Toast.makeText(activity, "此控件当前不可移除", Toast.LENGTH_SHORT).show()
@@ -1212,7 +1216,7 @@ private class InspectorOverlay private constructor(
             .setMessage("$label：\\n$url\\n\\n将交给系统或 QQ 打开此地址，请确认链接来源可信。")
             .setPositiveButton("确认跳转") { _, _ ->
                 runCatching { activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
-                    .onFailure { Toast.makeText(activity, "无法打开链接：${it.javaClass.simpleName}", Toast.LENGTH_LONG).show() }
+                    .onFailure { Toast.makeText(activity, "无法打开链接：${it.javaClass.simpleName}", Toast.LENGTH_SHORT).show() }
             }
             .setNegativeButton("取消", null)
             .show()
@@ -1249,7 +1253,7 @@ private class InspectorOverlay private constructor(
                 .putBoolean(Constants.PrekXXX + "开发者选项/QQ界面控件探测器", false)
                 .apply()
             QQInspectorRuntime.detach(activity)
-            Toast.makeText(activity, "控件探测器已停用，可在 TNT 设置中重新开启", Toast.LENGTH_LONG).show()
+            Toast.makeText(activity, "控件探测器已停用，可在 TNT 设置中重新开启", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -1274,7 +1278,7 @@ private class InspectorOverlay private constructor(
                 root.addView(overlay, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             }.onFailure {
                 Logger.e("TNT inspector open failed", it)
-                Toast.makeText(activity, "控件探测器打开失败：${it.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+                Toast.makeText(activity, "控件探测器打开失败：${it.javaClass.simpleName}", Toast.LENGTH_SHORT).show()
             }
         }
     }
