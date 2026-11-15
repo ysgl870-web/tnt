@@ -1,6 +1,7 @@
 package moe.ono.hooks.item.developer
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.app.Application
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -25,7 +26,6 @@ import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import moe.ono.hooks._base.BaseClickableFunctionHookItem
@@ -95,7 +95,7 @@ class QQInspectorLinkHistory : BaseClickableFunctionHookItem() {
             }
         }
 
-        MaterialAlertDialogBuilder(context)
+        AlertDialog.Builder(context)
             .setTitle("QQ 链接记录（${rows.size}/100）")
             .setMessage(text)
             .setPositiveButton("复制全部") { _, _ ->
@@ -426,7 +426,18 @@ private class InspectorOverlay private constructor(
         addView(toolbarScroll, toolbarParams)
         boxes.setNodes(nodes)
         boxes.setPickMode(false)
-        boxes.setOnNodeSelected { runSafely { showNode(it) } }
+        boxes.setOnNodeSelected { selected ->
+            if (activity.isFinishing || activity.isDestroyed) return@setOnNodeSelected
+            activity.runOnUiThread {
+                runSafely {
+                    if (selected.view.isAttachedToWindow || selected.view.parent != null) {
+                        showNode(selected)
+                    } else {
+                        Toast.makeText(activity, "该控件已离开当前页面，请刷新控件列表", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }
         buildToolbar()
     }
 
@@ -453,8 +464,11 @@ private class InspectorOverlay private constructor(
             if (activity.isFinishing || activity.isDestroyed) return
             action()
         } catch (error: Throwable) {
-            Logger.e("TNT inspector action failed", error)
-            Toast.makeText(activity, "控件操作失败：${error.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+            Logger.e("TNT inspector action failed: " + error.message, error)
+            val detail = error.message?.take(100)
+            val message = if (detail.isNullOrBlank()) error.javaClass.simpleName
+                else "${error.javaClass.simpleName}: $detail"
+            Toast.makeText(activity, "控件操作失败：$message", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -536,7 +550,7 @@ private class InspectorOverlay private constructor(
     private fun showLinkHistory() {
         val rows = QQInspectorLinks.readAll()
         if (rows.isEmpty()) {
-            MaterialAlertDialogBuilder(activity)
+            AlertDialog.Builder(activity)
                 .setTitle("QQ 链接记录")
                 .setMessage("暂时没有记录。打开 QQ 页面后点击「保存链接」，或浏览内置网页触发自动记录。")
                 .setPositiveButton("知道了", null)
@@ -547,12 +561,12 @@ private class InspectorOverlay private constructor(
             val date = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(row.optLong("time")))
             "$date · ${row.optString("kind")} · ${row.optString("source")}\n${row.optString("url")}"
         }.toTypedArray()
-        MaterialAlertDialogBuilder(activity)
+        AlertDialog.Builder(activity)
             .setTitle("链接历史（${rows.size}/100）")
             .setItems(labels) { _, which ->
                 val row = rows.asReversed().getOrNull(which) ?: return@setItems
                 val url = row.optString("url")
-                MaterialAlertDialogBuilder(activity)
+                AlertDialog.Builder(activity)
                     .setTitle("链接详情")
                     .setMessage(url)
                     .setPositiveButton("复制") { _, _ -> copyText(activity, "QQ链接", url) }
@@ -579,7 +593,7 @@ private class InspectorOverlay private constructor(
                 if (node.directLinks.isNotEmpty()) "\n🔗 控件链接：${node.directLinks.first()}"
                 else if (node.links.isNotEmpty()) "\n🌐 页面链接：${node.links.first()}" else ""
         }.toTypedArray()
-        MaterialAlertDialogBuilder(activity)
+        AlertDialog.Builder(activity)
             .setTitle("控件列表（共 ${nodes.size} 个，显示前 ${shownNodes.size} 个）")
             .setItems(labels) { _, which -> shownNodes.getOrNull(which)?.let { runSafely { showNode(it) } } }
             .setNegativeButton("关闭", null)
@@ -629,7 +643,7 @@ private class InspectorOverlay private constructor(
             node.view.transformationMethod !is PasswordTransformationMethod
         if (canReadText) actions.add("读取此控件文本（可能包含聊天内容）")
 
-        MaterialAlertDialogBuilder(activity)
+        AlertDialog.Builder(activity)
             .setTitle("控件详情")
             .setMessage(message)
             .setItems(actions.toTypedArray()) { _, which ->
@@ -653,12 +667,12 @@ private class InspectorOverlay private constructor(
                     }
                     "复制第一个链接" -> links.firstOrNull()?.let { copyText(activity, "QQ链接", it) }
                     "读取此控件文本（可能包含聊天内容）" -> {
-                        MaterialAlertDialogBuilder(activity)
+                        AlertDialog.Builder(activity)
                             .setTitle("读取此控件文本？")
                             .setMessage("文本可能包含私聊内容、群消息、昵称或其他个人信息。仅在你确认当前页面内容可以读取时继续。")
                             .setPositiveButton("确认读取") { _, _ ->
                                 val text = (node.view as? TextView)?.text?.toString().orEmpty().take(600)
-                                MaterialAlertDialogBuilder(activity)
+                                AlertDialog.Builder(activity)
                                     .setTitle("控件文本（最多600字符）")
                                     .setMessage(if (text.isBlank()) "（空）" else text)
                                     .setPositiveButton("复制") { _, _ -> copyText(activity, "QQ控件文本", text) }
@@ -699,13 +713,13 @@ private class InspectorOverlay private constructor(
     }
 
     private fun disableFeature() {
-        runCatching {
+        runSafely {
             ConfigManager.getDefaultConfig().edit()
                 .putBoolean(Constants.PrekXXX + "开发者选项/QQ界面控件探测器", false)
                 .apply()
+            QQInspectorRuntime.detach(activity)
+            Toast.makeText(activity, "控件探测器已停用，可在 TNT 设置中重新开启", Toast.LENGTH_LONG).show()
         }
-        QQInspectorRuntime.detach(activity)
-        Toast.makeText(activity, "控件探测器已停用，可在 TNT 设置中重新开启", Toast.LENGTH_LONG).show()
     }
 
     private fun close() {
@@ -827,7 +841,9 @@ private class InspectorOverlay private constructor(
                     pressedNode = null
                     if (down != null) {
                         val up = hitNode(x, y)
-                        if (up != null) onSelected?.invoke(up)
+                        if (up != null && up.view === down.view) {
+                            onSelected?.invoke(down)
+                        }
                         return true
                     }
                     return false
