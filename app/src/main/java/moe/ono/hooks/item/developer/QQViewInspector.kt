@@ -770,9 +770,13 @@ private class InspectorOverlay private constructor(
                 val url = row.optString("url")
                 AlertDialog.Builder(activity)
                     .setTitle("链接详情")
-                    .setMessage(url)
+                    .setMessage("来源：${row.optString("source")}\\n类型：${row.optString("kind")}\\n\\n$url")
                     .setPositiveButton("复制") { _, _ -> copyText(activity, "QQ链接", url) }
-                    .setNeutralButton("清空记录") { _, _ ->
+                    .setNeutralButton("跳转") { _, _ -> confirmHistoryOpen(url) }
+                    .setNegativeButton("关闭", null)
+                    .show()
+            }
+            .setNeutralButton("清空记录") { _, _ ->
                         QQInspectorLinks.clear()
                         Toast.makeText(activity, "链接记录已清空", Toast.LENGTH_SHORT).show()
                     }
@@ -784,6 +788,18 @@ private class InspectorOverlay private constructor(
                 Toast.makeText(activity, "链接记录已清空", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("关闭", null)
+            .show()
+    }
+
+    private fun confirmHistoryOpen(url: String) {
+        AlertDialog.Builder(activity)
+            .setTitle("确认跳转？")
+            .setMessage("即将打开以下链接：\\n$url\\n\\n请确认链接来源可信。")
+            .setPositiveButton("确认跳转") { _, _ ->
+                runCatching { activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+                    .onFailure { Toast.makeText(activity, "无法打开链接：${it.javaClass.simpleName}", Toast.LENGTH_LONG).show() }
+            }
+            .setNegativeButton("取消", null)
             .show()
     }
 
@@ -836,11 +852,18 @@ private class InspectorOverlay private constructor(
 
         val actions = mutableListOf("复制控件信息")
         if (canModify(node)) {
-            actions.add("临时隐藏此控件")
-            if (node.view.isEnabled) actions.add("临时禁用此控件")
+            actions.add("隐藏此控件")
+            actions.add("强制移除此控件（可恢复）")
+            if (node.view.isEnabled) actions.add("禁用此控件")
         }
-        if (links.isNotEmpty()) actions.add("复制第一个链接")
-        if (node.imageLinks.isNotEmpty()) actions.add("复制图片链接（${node.imageLinks.size}）")
+        links.forEachIndexed { index, _ ->
+            actions.add("复制链接 ${index + 1}")
+            actions.add("跳转链接 ${index + 1}（需确认）")
+        }
+        node.imageLinks.forEachIndexed { index, _ ->
+            actions.add("复制图片直链 ${index + 1}")
+            actions.add("打开图片 ${index + 1}（需确认）")
+        }
         val canReadText = node.view is TextView &&
             node.view !is EditText &&
             node.view.transformationMethod !is PasswordTransformationMethod
@@ -852,15 +875,19 @@ private class InspectorOverlay private constructor(
             .setItems(actions.toTypedArray()) { _, which ->
                 when (actions[which]) {
                     "复制控件信息" -> copyText(activity, "QQ控件", nodeJson(node).toString(2))
-                    "临时隐藏此控件" -> {
+                    "隐藏此控件" -> {
                         if (canModify(node) && InspectorControlState.hide(node.view)) {
-                            Toast.makeText(activity, "控件已临时隐藏，点“恢复控件”可还原", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(activity, "控件已隐藏，可点“恢复控件”还原", Toast.LENGTH_SHORT).show()
                             refresh()
-                        } else {
-                            Toast.makeText(activity, "此控件当前不可隐藏", Toast.LENGTH_SHORT).show()
-                        }
+                        } else Toast.makeText(activity, "此控件当前不可隐藏", Toast.LENGTH_SHORT).show()
                     }
-                    "临时禁用此控件" -> {
+                    "强制移除此控件（可恢复）" -> {
+                        if (canModify(node) && InspectorControlState.remove(node.view)) {
+                            Toast.makeText(activity, "控件已从当前页面移除，可恢复", Toast.LENGTH_SHORT).show()
+                            refresh()
+                        } else Toast.makeText(activity, "此控件当前不可移除", Toast.LENGTH_SHORT).show()
+                    }
+                    "禁用此控件" -> {
                         if (canModify(node) && InspectorControlState.disable(node.view)) {
                             Toast.makeText(activity, "控件已临时禁用，点“恢复控件”可还原", Toast.LENGTH_SHORT).show()
                             refresh()
@@ -868,8 +895,6 @@ private class InspectorOverlay private constructor(
                             Toast.makeText(activity, "此控件当前不可禁用", Toast.LENGTH_SHORT).show()
                         }
                     }
-                    "复制第一个链接" -> links.firstOrNull()?.let { copyText(activity, "QQ链接", it) }
-                    "复制图片链接（${node.imageLinks.size}）" -> copyText(activity, "QQ图片链接", node.imageLinks.joinToString("\\n"))
                     "读取此控件文本（可能包含聊天内容）" -> {
                         AlertDialog.Builder(activity)
                             .setTitle("读取此控件文本？")
@@ -886,9 +911,34 @@ private class InspectorOverlay private constructor(
                             .setNegativeButton("不读取", null)
                             .show()
                     }
+                    else -> {
+                        val label = actions[which]
+                        val copyLink = Regex("^复制链接 (\\d+)$").matchEntire(label)?.groupValues?.get(1)?.toIntOrNull()
+                        val openLink = Regex("^跳转链接 (\\d+)（需确认）$").matchEntire(label)?.groupValues?.get(1)?.toIntOrNull()
+                        val copyImage = Regex("^复制图片直链 (\\d+)$").matchEntire(label)?.groupValues?.get(1)?.toIntOrNull()
+                        val openImage = Regex("^打开图片 (\\d+)（需确认）$").matchEntire(label)?.groupValues?.get(1)?.toIntOrNull()
+                        when {
+                            copyLink != null -> links.getOrNull(copyLink - 1)?.let { copyText(activity, "QQ链接", it) }
+                            openLink != null -> links.getOrNull(openLink - 1)?.let { confirmOpenLink(it, "页面链接") }
+                            copyImage != null -> node.imageLinks.getOrNull(copyImage - 1)?.let { copyText(activity, "QQ图片直链", it) }
+                            openImage != null -> node.imageLinks.getOrNull(openImage - 1)?.let { confirmOpenLink(it, "图片直链") }
+                        }
+                    }
                 }
             }
             .setNegativeButton("关闭", null)
+            .show()
+    }
+
+    private fun confirmOpenLink(url: String, label: String) {
+        AlertDialog.Builder(activity)
+            .setTitle("确认跳转？")
+            .setMessage("$label：\\n$url\\n\\n将交给系统或 QQ 打开此地址，请确认链接来源可信。")
+            .setPositiveButton("确认跳转") { _, _ ->
+                runCatching { activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+                    .onFailure { Toast.makeText(activity, "无法打开链接：${it.javaClass.simpleName}", Toast.LENGTH_LONG).show() }
+            }
+            .setNegativeButton("取消", null)
             .show()
     }
 
@@ -942,7 +992,10 @@ private class InspectorOverlay private constructor(
                 if (alreadyOpen) return
                 val entry = root.findViewWithTag<View>(QQInspectorRuntimeEntryTag)
                 if (entry != null) root.removeView(entry)
-                val overlay = InspectorOverlay(activity, root, InspectorTree.collect(activity))
+                val initialNodes = runCatching { InspectorTree.collect(activity) }
+                    .onFailure { Logger.e("TNT inspector initial scan failed", it) }
+                    .getOrDefault(emptyList())
+                val overlay = InspectorOverlay(activity, root, initialNodes)
                 root.addView(overlay, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             }.onFailure {
                 Logger.e("TNT inspector open failed", it)
@@ -1070,7 +1123,7 @@ private fun dp(context: Context, value: Int): Int =
  * No request headers, body, response body, chat packet, or login key is accessed.
  */
 private object QQInspectorLinks {
-    private const val STORAGE_KEY = "tnt_qq_inspector_links_v2"
+    private const val STORAGE_KEY = "tnt_qq_inspector_links_v3"
     private const val MAX_ROWS = 100
     private val lock = Any()
     private val recent = LinkedHashMap<String, Long>()
@@ -1231,7 +1284,9 @@ private object QQInspectorLinks {
             recent[fingerprint] = now
             while (recent.size > 240) recent.remove(recent.keys.first())
             runCatching {
-                val old = JSONArray(ConfigManager.cGetString(STORAGE_KEY, "[]"))
+                val config = ConfigManager.getDefaultConfig()
+                val legacy = ConfigManager.cGetString("tnt_qq_inspector_links_v2", "[]")
+                val old = JSONArray(config.getStringOrDefault(STORAGE_KEY, legacy))
                 val next = JSONArray()
                 val first = (old.length() - (MAX_ROWS - 1)).coerceAtLeast(0)
                 for (index in first until old.length()) old.optJSONObject(index)?.let { next.put(it) }
@@ -1242,7 +1297,7 @@ private object QQInspectorLinks {
                         .put("source", source.take(100))
                         .put("url", safe)
                 )
-                ConfigManager.cPutString(STORAGE_KEY, next.toString())
+                config.edit().putString(STORAGE_KEY, next.toString()).apply()
             }.onFailure {
                 Logger.w("TNT link history write failed: " + it.javaClass.simpleName)
             }
@@ -1250,14 +1305,16 @@ private object QQInspectorLinks {
     }
 
     fun readAll(): List<JSONObject> = runCatching {
-        val array = JSONArray(ConfigManager.cGetString(STORAGE_KEY, "[]"))
+        val config = ConfigManager.getDefaultConfig()
+        val legacy = ConfigManager.cGetString("tnt_qq_inspector_links_v2", "[]")
+        val array = JSONArray(config.getStringOrDefault(STORAGE_KEY, legacy))
         (0 until array.length()).mapNotNull { array.optJSONObject(it)?.let { row -> JSONObject(row.toString()) } }
     }.getOrDefault(emptyList())
 
     fun clear() {
         synchronized(lock) {
             recent.clear()
-            ConfigManager.cPutString(STORAGE_KEY, "[]")
+            ConfigManager.getDefaultConfig().edit().putString(STORAGE_KEY, "[]").apply()
         }
     }
 }
