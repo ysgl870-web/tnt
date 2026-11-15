@@ -450,7 +450,8 @@ private class InspectorOverlay private constructor(
         val labels = nodes.mapIndexed { index, node ->
             "${index + 1}. ${node.className.substringAfterLast('.')}\n" +
                 "${node.resourceId} · ${node.width}×${node.height} · ${node.area}px²" +
-                if (node.links.isNotEmpty()) "\n🔗 ${node.links.first()}" else ""
+                if (node.directLinks.isNotEmpty()) "\n🔗 控件链接：${node.directLinks.first()}"
+                else if (node.links.isNotEmpty()) "\n🌐 页面链接：${node.links.first()}" else ""
         }.toTypedArray()
         MaterialAlertDialogBuilder(activity)
             .setTitle("${nodes.size} 个控件可选（面积从小到大）")
@@ -460,8 +461,11 @@ private class InspectorOverlay private constructor(
     }
 
     private fun showNode(node: InspectorNode) {
-        val linkText = if (node.links.isEmpty()) "当前控件没有直接链接；下面列出当前 Activity/WebView 页面链接：" else ""
-        val links = node.links.ifEmpty { QQInspectorLinks.readAll().takeLast(8).map { it.optString("url") } }
+        val controlLinks = node.directLinks.distinct()
+        val pageLinks = node.links.filterNot { it in controlLinks }.distinct()
+        val links = (controlLinks + pageLinks).ifEmpty {
+            QQInspectorLinks.readAll().takeLast(8).map { it.optString("url") }
+        }
         val message = buildString {
             append("控件类名：").append(node.className)
             append("\n资源 ID：").append(node.resourceId)
@@ -478,8 +482,13 @@ private class InspectorOverlay private constructor(
             append(" · 启用：").append(node.enabled)
             append("\n子控件数：").append(node.childCount)
             append("\nviewInfo：").append(node.view.toString().take(900))
-            append("\n\n").append(linkText)
-            append(links.take(8).joinToString("\n"))
+            append("\n\n控件自身链接：")
+            append(if (controlLinks.isEmpty()) "无" else "\n" + controlLinks.take(8).joinToString("\n"))
+            append("\n\n当前 Activity / WebView 页面链接：")
+            append(if (pageLinks.isEmpty()) "无" else "\n" + pageLinks.take(8).joinToString("\n"))
+            if (controlLinks.isEmpty() && pageLinks.isEmpty() && links.isNotEmpty()) {
+                append("\n最近保存的链接：\n").append(links.take(8).joinToString("\n"))
+            }
             append("\n\n控件文本默认隐藏；仅在你明确确认后读取。")
         }
 
