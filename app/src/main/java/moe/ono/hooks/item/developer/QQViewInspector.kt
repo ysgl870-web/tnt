@@ -209,6 +209,7 @@ private data class InspectorNode(
     val enabled: Boolean,
     val alpha: Float,
     val childCount: Int,
+    val directLinks: List<String>,
     val links: List<String>
 )
 
@@ -246,6 +247,7 @@ private object InspectorTree {
                     "NO_ID"
                 }
                 val childCount = (view as? ViewGroup)?.childCount ?: 0
+                val directLinks = collectLinks(view)
                 result.add(
                     InspectorNode(
                         view = view,
@@ -262,7 +264,8 @@ private object InspectorTree {
                         enabled = view.isEnabled,
                         alpha = view.alpha,
                         childCount = childCount,
-                        links = (collectLinks(view) + pageLinks).distinct()
+                        directLinks = directLinks,
+                        links = (directLinks + pageLinks).distinct()
                     )
                 )
             }
@@ -527,7 +530,8 @@ private class InspectorOverlay private constructor(
         .put("alpha", node.alpha.toDouble())
         .put("childCount", node.childCount)
         .put("viewInfo", node.view.toString().take(900))
-        .put("links", JSONArray(node.links))
+        .put("directLinks", JSONArray(node.directLinks))
+        .put("pageAndControlLinks", JSONArray(node.links))
 
     private fun copyTree() {
         val array = JSONArray()
@@ -586,7 +590,7 @@ private class InspectorOverlay private constructor(
             nodes = value
             val minArea = (dp(context, 9) * dp(context, 9)).toLong()
             drawnNodes = value.filter {
-                it.area >= minArea && (it.clickable || it.longClickable || it.links.isNotEmpty() ||
+                it.area >= minArea && (it.clickable || it.longClickable || it.directLinks.isNotEmpty() ||
                     (it.focusable && it.childCount == 0))
             }.take(120)
             invalidate()
