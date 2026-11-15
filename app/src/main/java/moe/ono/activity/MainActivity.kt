@@ -177,7 +177,7 @@ class MainActivity : AppCompatTransferActivity() {
                 jump(this, "https://t.me/ouom_pub")
             }
             R.id.cv_github -> {
-                jump(this, "https://github.com/cwuom/ono")
+                jump(this, "https://github.com/ysgl870-web/tnt/tree/tnt-next/ono-base")
             }
         }
     }
@@ -235,7 +235,7 @@ class MainActivity : AppCompatTransferActivity() {
             }
             R.id.menu_main_about -> {
                 MaterialAlertDialogBuilder(this)
-                    .setTitle("ono")
+                    .setTitle("TNT · 光流")
                     .setMessage("一个 QQ 功能增强模块\n源代码：https://github.com/cwuom/ono")
                     .show()
             }
