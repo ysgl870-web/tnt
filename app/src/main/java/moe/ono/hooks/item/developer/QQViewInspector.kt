@@ -337,10 +337,16 @@ private class InspectorOverlay private constructor(
         isClickable = false
         isFocusable = false
         addView(boxes, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
-        addView(
-            toolbarScroll,
-            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT, Gravity.TOP)
-        )
+        val toolbarParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT, Gravity.TOP)
+        val rootLocation = IntArray(2)
+        root.getLocationOnScreen(rootLocation)
+        val statusBarId = activity.resources.getIdentifier("status_bar_height", "dimen", "android")
+        val statusBarHeight = if (statusBarId > 0) {
+            runCatching { activity.resources.getDimensionPixelSize(statusBarId) }.getOrDefault(0)
+        } else 0
+        // Some QQ pages are edge-to-edge; offset the toolbar only when content begins behind the status bar.
+        toolbarParams.topMargin = (statusBarHeight - rootLocation[1]).coerceAtLeast(0)
+        addView(toolbarScroll, toolbarParams)
         boxes.setNodes(nodes)
         boxes.setOnNodeSelected { showNode(it) }
         buildToolbar()
