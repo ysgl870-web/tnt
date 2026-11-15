@@ -236,7 +236,7 @@ class MainActivity : AppCompatTransferActivity() {
             R.id.menu_main_about -> {
                 MaterialAlertDialogBuilder(this)
                     .setTitle("TNT · 光流")
-                    .setMessage("一个 QQ 功能增强模块\n源代码：https://github.com/cwuom/ono")
+                    .setMessage("TNT · QQNT Android 模块\n二次开发：亦是光流\n基于 ONO 开源项目（GPL-3.0）\n源码：https://github.com/ysgl870-web/tnt/tree/tnt-next/ono-base")
                     .show()
             }
             else -> {
