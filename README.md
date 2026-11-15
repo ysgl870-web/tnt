@@ -1,98 +1,78 @@
-<div align="center">
-    <h1> OUO </h1>
+# TNT · 光流 QQNT Android 模块
 
-[![Telegram](https://img.shields.io/static/v1?label=Telegram&message=Channel&color=0088cc)](https://t.me/ouom_pub)
-[![Telegram](https://img.shields.io/static/v1?label=Telegram&message=CI&color=0088cc)](https://t.me/ono_ci)
-[![Telegram](https://img.shields.io/static/v1?label=Telegram&message=Chat&color=0088cc)](https://t.me/ouom_chat)
+**二次开发：亦是光流**  
+**基础工程：ONO（GPL-3.0）**  
+**源码分支：`tnt-next/ono-base`**
 
-QQ, Now with Superpowers
-</div>
+TNT 是从 ONO 独立分支重新构建的 QQNT Android Xposed/LSPosed 模块。此分支以 `cwuom/ono` 的公开源码提交为基础，不继承旧 TNT 的功能实现；旧仓库 `main` 分支保持独立，不会被本分支改写。
 
-> [!WARNING]  
-> 一切开发旨在学习，请勿用于非法用途
+## 主要方向
 
--------
+- 保留 ONO 的 QQNT 模块加载、设置和 Hook 基础架构。
+- 增加 QQ 控件树探测器与 Scheme/WebView 链接记录。
+- 使用模块内可见入口和本地记录，不要求悬浮窗权限、无障碍权限或远程服务。
+- 不同 QQ 构建缺失某个可选 Hook 入口时自动跳过，不阻断 QQ 正常操作。
 
-# How To Use / 说明
-在`Xposed 框架`中激活本模块后，在 QQ 自带设置中点击 `ONO` 即可进入设置页面
+## QQ 界面控件探测器
 
-- Android >= `10.0`
-- QQ >= `9.0.71` （仅适配 QQNT，短期内不会适配 TIM）
+在 TNT 设置 → 开发者选项 → 开启「QQ界面控件探测器」后，QQ 页面右侧会出现「控件」入口。点击进入页面检查模式：
 
+- 绘制当前页面控件边框和序号。
+- 递归扫描当前 Activity 的可见 View 树，最多 420 个节点。
+- 按控件屏幕面积从小到大排序，列表显示前 180 项。
+- 点选控件后显示完整类名、资源 ID、屏幕矩形坐标、宽高、面积、层级深度、透明度、可点击/长按/聚焦状态和子控件数量。
+- 支持复制单个控件结构或整页结构 JSON。
+- 文本默认隐藏；只有在点选控件后再单独选择“读取此控件文本”并二次确认才显示。EditText 和密码转换文本不会读取。
+- 不触发控件点击、不修改控件监听器、不调用 QQ 私有动作。
 
-# Reference / 参考项目
+## QQ 链接记录
 
-<table>
-<tr>
-  <td><a href="https://github.com/cinit/QAuxiliary">QAuxiliary</a></td>
-  <td>QNotified phoenix - To make OICQ great again</td>
-</tr>
-<tr>
-  <td><a href="https://github.com/ReChronoRain/HyperCeiler">HyperCeiler</a></td>
-  <td>MIUI & HyperOS enhancement module - Make MIUI & HyperOS Great Again!</td>
-</tr>
-<tr>
-  <td><a href="https://github.com/LuckyPray/qq-stub">qq-stub</a></td>
-  <td>qq-stub</td>
-</tr>
-<tr>
-  <td><a href="https://github.com/suzhelan/TimTool">TimTool</a></td>
-  <td>Tim功能性增强XPosed模块，为Tim增加更多趣味功能</td>
-</tr>
-<tr>
-  <td><a href="https://github.com/fuqiuluo/QwQ">QWQ</a></td>
-  <td>QwQ sacrifice - To make OICQ great again</td>
-</tr>
-<tr>
-  <td><a href="https://github.com/LuckyPray/XAutoDaily">XAutoDaily</a></td>
-  <td>一个基于QQ的全自动签到模块</td>
-</tr>
-</table>
+开启控件探测器后，同步启用本地链接观察：
 
+- Activity 启动时携带的 HTTP(S) / QQ Scheme 链接。
+- Android WebView、腾讯 X5 WebView、QQ 已知 QmX5Webview 的 loadUrl / postUrl。
+- WebView 页面跳转回调。
+- 选中 TextView 时读取其中 URLSpan。
+- 最新 100 条链接保存在本机 MMKV，可在「查看QQ链接记录」中查看、复制和清空。
 
-# TODO / 展望未来
-### 功能性
-- 发送定时消息
-- 语音面板（本地）
-- 显示群文件下载次数
-- 对常用 Protobuf 代码进行整合，做成一个新的功能
-- 聊天列表分组（类似于 `Telegram` 的分组）
-- 回应自身
-- 自定义主题
-- 复读机（长按消息）
-- 虚拟定位
-- 加密通话
-- 本地 Rose 指令
-- 资料卡显示 IP 属地
-- 查看上次崩溃详情
-- 非致命错误的追踪
+查询参数中名称类似 token、cookie、auth、ticket、sign、skey、uin、session、password 的值会自动脱敏。模块不读取 HTTP 请求头、请求/响应正文、聊天消息包、TEA/TLV/ECDH 密钥或账号登录材料，不上传抓取记录。
 
+## 参考项目与边界
 
-### 其它
-- 支持 native hook
+- [ONO](https://github.com/cwuom/ono)：源码基础，保留 GPL-3.0 许可及版权声明。
+- [QQHook](https://github.com/callng/QQHook)：研究协议分析工具组织方式与版本兼容说明；本工程没有移植登录密钥、认证签名或协议注入逻辑。
+- [QEdge](https://github.com/LengYu-cr/QEdge-main)：研究 NT QQ Hook 加载、模块化功能入口和兼容性处理思路；未直接复制其第三方实现代码。
 
-### 优化
-- 减小模块体积
+## 构建
 
-### 已知问题/等待修复
-> 如果你有能力且有时间修复，可以给我提 pr，谢谢啦
+需要 JDK 17、Android SDK Platform 35，并确保 Git 子模块可以递归拉取。
 
-- 协议包有时无法正确发出，但无法找到稳定复现的方式
-- 开启气泡重定向后部分用户无法在气泡商店显示应用按钮
+```bash
+git clone --recurse-submodules https://github.com/ysgl870-web/tnt.git
+cd tnt
+git checkout tnt-next/ono-base
+chmod +x gradlew
+./gradlew --no-daemon assembleRelease
+```
 
-# Support / 赞助
+APK 输出名：`TNT-Module-<version>.apk`。如未提供发布签名密钥，沿用 ONO 的 PR 构建策略使用 Debug 签名；正式发布请配置你自己的签名密钥。
 
-### 请直接联系 [@ouom_bot](https://t.me/ouom_bot)
+## TNT 构建中心
 
-- 开发者目前是学生，主要经济来源来自家庭支持，但业余活动仍需一定支出。您可以自由选择是否捐助。
-- 赞助完全自愿，赞助者不会获得任何特权，且不赞助的用户依然可以使用所有功能。
-- 请注意，赞助后不支持退款或折现等选项。
-- 如果您所在的地区无法访问上面的链接，请尝试使用代理。
-- 赞助者可以选择是否在 [赞助者名单](sponsors.md) 中公示您的昵称。
+选择「源码构建」：
 
-感谢您的支持与理解！
+- 仓库：`https://github.com/ysgl870-web/tnt`
+- 分支：`tnt-next/ono-base`
+- 构建命令：`./gradlew --no-daemon assembleRelease`
+- JDK：17
+- Android SDK：Platform 35
 
+## 版本适配
 
---------
+你提供的截图对应 **QQ 9.3.80.42775（官版渠道）**。控件树探测使用 Android View API，不依赖某个特定 QQ 混淆类名；链接记录另外适配 Android WebView、腾讯 X5 与已知 QmX5Webview 入口。该版本号是本轮实机适配目标，不代表已经完成真实设备验收。
 
-### 如果觉得本项目对你有帮助，欢迎在 GitHub 仓库右上角 Star ⭐ 支持，让我有更多动力持续更新！
+## 署名
+
+TNT · 光流 QQNT Android 模块  
+二次开发：亦是光流  
+基于 ONO 开源项目二次开发，遵循 GPL-3.0。
