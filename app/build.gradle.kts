@@ -21,6 +21,8 @@ android {
     val buildUUID = UUID.randomUUID()
     println("buildUUID: $buildUUID")
 
+    // CI validates app/ono.jks before invoking Gradle; if it is invalid or absent,
+    // release falls back to the standard debug signing config below so CI can still produce a test APK.
     signingConfigs {
         create("release") {
             val storePath = project.findProperty("KEYSTORE_FILE") as String? ?: "ono.jks"
