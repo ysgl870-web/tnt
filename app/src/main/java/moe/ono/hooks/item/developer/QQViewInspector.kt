@@ -1097,7 +1097,7 @@ private class InspectorOverlay private constructor(
                 append("\n\nArk / 卡片 JSON：已识别 ").append(cardJsons.size).append(" 份结构数据")
                 append("\n").append(cardJsons.first().take(1800))
             } else append("\n\nArk / 卡片 JSON：当前视图未暴露可识别的卡片结构")
-            append("\n\n控件文本默认隐藏；仅在你明确确认后读取。')
+            append("\n\n控件文本默认隐藏；仅在你明确确认后读取。")
         }
 
         val actions = mutableListOf("复制控件信息")
