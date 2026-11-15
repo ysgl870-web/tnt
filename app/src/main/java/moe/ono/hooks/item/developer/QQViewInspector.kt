@@ -722,7 +722,8 @@ private object QQInspectorLinks {
         val root = runCatching { activity.findViewById<ViewGroup>(android.R.id.content) }.getOrNull()
         var inspected = 0
         fun walk(view: View) {
-            if (inspected++ > 260) return
+            if (inspected++ > 700) return
+            if (view is InspectorOverlay || view.tag == "tnt.qq.inspector.entry") return
             if (view.visibility != View.VISIBLE || view.alpha <= 0.03f) return
             listOf("getUrl", "getOriginalUrl", "getCurrentUrl", "getWebUrl").forEach { name ->
                 val raw = runCatching {
