@@ -15,23 +15,23 @@ TNT 是从 ONO 独立分支重新构建的 QQNT Android Xposed/LSPosed 模块。
 
 ## QQ 界面控件探测器
 
-在 TNT 设置 → 开发者选项 → 开启「QQ界面控件探测器」后，QQ 页面右侧会出现「控件」入口。点击进入页面检查模式：
+在 TNT 设置 → 开发者选项 → 开启「QQ界面控件探测器」后，QQ 页面右侧会出现「控件」入口。点开后提供独立的控件工具栏：
 
-- 绘制当前页面控件边框和序号。
-- 递归扫描当前 Activity 的可见 View 树，最多 420 个节点。
-- 按控件屏幕面积从小到大排序，列表显示前 180 项。
-- 点选控件后显示完整类名、资源 ID、屏幕矩形坐标、宽高、面积、层级深度、透明度、可点击/长按/聚焦状态和子控件数量。
-- 支持复制单个控件结构或整页结构 JSON。
-- 文本默认隐藏；只有在点选控件后再单独选择“读取此控件文本”并二次确认才显示。EditText 和密码转换文本不会读取。
-- 不触发控件点击、不修改控件监听器、不调用 QQ 私有动作。
+- 绘制可点击控件的细蓝色边框与序号，不铺全屏蓝色蒙层。
+- 递归扫描当前 Activity 的可见 View 树，最多 420 个节点；控件列表最多显示前 160 项。
+- **点选模式默认关闭**：工具栏显示「点选:关」时，触摸事件会交还给 QQ，正常点击不会被探测层拦截；主动开启「点选:开」后，点蓝色边框才会打开控件详情。
+- 详情显示类名、资源 ID、屏幕坐标、宽高、面积、层级深度、透明度、点击/长按/聚焦/启用状态，以及控件自身链接和当前 Activity/WebView 页面链接。
+- 支持复制单个控件结构或整页 JSON；链接可单独复制或保存到本地历史。
+- 可对选中的小范围控件执行**临时隐藏**或**临时禁用**；工具栏「恢复控件」可还原。关闭探测器或停用功能时也会自动还原，避免把 QQ 页面留在异常状态。
+- 工具栏与扫描操作均带异常保护；文本默认隐藏，只有明确选择并二次确认后才读取。EditText 和密码转换文本不会读取。
 
 ## QQ 链接记录
 
 开启控件探测器后，同步启用本地链接观察：
 
-- Activity 启动时携带的 HTTP(S) / QQ Scheme 链接。
-- Android WebView、腾讯 X5 WebView、QQ 已知 QmX5Webview 的 loadUrl / postUrl。
-- WebView 页面跳转回调。
+- Activity Intent 携带的 HTTP(S) / QQ Scheme 链接，并观察 startActivity、startActivityForResult、onNewIntent 与 setIntent 跳转。
+- Android WebView、腾讯 X5 WebView、QQ 已知 QmX5Webview 的当前 URL、loadUrl / postUrl 与页面跳转回调。
+- 「保存链接」会重新扫描当前 Activity 和可见 WebView；找不到时会明确提示，不会虚报保存成功。
 - 选中 TextView 时读取其中 URLSpan。
 - 最新 100 条链接保存在本机 MMKV，可在「查看QQ链接记录」中查看、复制和清空。
 
@@ -59,7 +59,7 @@ APK 输出名：`TNT-Module-<version>.apk`。如未提供发布签名密钥，�
 
 ## TNT 构建中心
 
-选择「源码构建」：
+`tnt-next/ono-base` 已纳入 GitHub Actions：向该分支提交代码后会执行 Release 构建，并上传名为 `tnt-next-apk` 的 APK 产物（测试签名）。选择「源码构建」：
 
 - 仓库：`https://github.com/ysgl870-web/tnt`
 - 分支：`tnt-next/ono-base`
