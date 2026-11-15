@@ -11,6 +11,7 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.text.Spanned
@@ -599,8 +600,13 @@ private class InspectorOverlay private constructor(
     private val toolbar = LinearLayout(activity).apply {
         orientation = LinearLayout.HORIZONTAL
         setPadding(dp(activity, 8), dp(activity, 8), dp(activity, 8), dp(activity, 8))
-        setBackgroundColor(0xE62C3038.toInt())
-        elevation = dp(activity, 10).toFloat()
+        background = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dp(activity, 14).toFloat()
+            setColor(0xF0182740.toInt())
+            setStroke(dp(activity, 1), 0x6658BDEB)
+        }
+        elevation = dp(activity, 12).toFloat()
     }
     private val toolbarScroll = HorizontalScrollView(activity).apply {
         isHorizontalScrollBarEnabled = false
@@ -679,7 +685,13 @@ private class InspectorOverlay private constructor(
         textSize = 12f
         gravity = Gravity.CENTER
         setTextColor(0xFFFFFFFF.toInt())
-        setBackgroundColor(0xFF087DBB.toInt())
+        background = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dp(activity, 10).toFloat()
+            setColor(0xFF087DBB.toInt())
+            setStroke(dp(activity, 1), 0x665DD7FF)
+        }
+        setPadding(dp(activity, 5), 0, dp(activity, 5), 0)
         isClickable = true
         isFocusable = true
         setOnClickListener { runSafely(action) }
@@ -814,7 +826,7 @@ private class InspectorOverlay private constructor(
     private fun showNode(node: InspectorNode) {
         val controlLinks = node.directLinks.distinct()
         val pageLinks = node.links.filterNot { it in controlLinks }.distinct()
-        val links = (controlLinks + pageLinks).ifEmpty {
+        val links = (controlLinks + pageLinks).distinct().ifEmpty {
             QQInspectorLinks.readAll().takeLast(8).map { it.optString("url") }
         }
         val message = buildString {
@@ -1028,7 +1040,7 @@ private class InspectorOverlay private constructor(
             nodes = value
             val minArea = (dp(context, 9) * dp(context, 9)).toLong()
             drawnNodes = value.filter {
-                it.area >= minArea && (it.clickable || it.longClickable || it.directLinks.isNotEmpty() ||
+                it.area >= minArea && (it.view is ImageView || it.clickable || it.longClickable || it.directLinks.isNotEmpty() ||
                     it.imageLinks.isNotEmpty() || (it.focusable && it.childCount == 0))
             }.take(120)
             invalidate()
@@ -1051,7 +1063,12 @@ private class InspectorOverlay private constructor(
                     (node.bounds.right - screenLeft).toFloat(),
                     (node.bounds.bottom - screenTop).toFloat()
                 )
-                // Outline only: no translucent fill, avoiding the accumulated full-blue screen.
+                // Images use a cyan outline; interactive controls use blue. No translucent fill.
+                borderPaint.color = if (node.view is ImageView || node.imageLinks.isNotEmpty()) {
+                    0xFF22C9D8.toInt()
+                } else {
+                    0xFF168DDE.toInt()
+                }
                 canvas.drawRect(rect, borderPaint)
                 if (rect.width() >= dp(context, 28) && rect.height() >= dp(context, 18)) {
                     val label = (index + 1).toString()
