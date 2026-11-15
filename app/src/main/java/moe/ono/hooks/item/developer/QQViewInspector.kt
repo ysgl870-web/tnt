@@ -497,6 +497,46 @@ private object InspectorTree {
                 }
             }
         }
+
+        // Also inspect explicit URL-like metadata exposed by visible controls. This catches
+        // app jump targets stored in tags/model fields even when the view has no URLSpan.
+        fun acceptModelLink(value: Any?, source: String) {
+            val raw = when (value) {
+                is String -> value
+                is Uri -> value.toString()
+                else -> return
+            }.trim()
+            if (raw.length !in 5..4096) return
+            val scheme = runCatching { Uri.parse(raw).scheme?.lowercase(Locale.ROOT) }.getOrNull()
+            if (scheme !in setOf("http", "https", "mqq", "mqqapi", "qq", "tencent")) return
+            QQInspectorLinks.add("VIEW_MODEL_LINK", raw, "$className/$source")
+            QQInspectorLinks.sanitize(raw)?.let(found::add)
+        }
+        acceptModelLink(view.contentDescription, "contentDescription")
+        acceptModelLink(view.tag, "tag")
+        val linkFieldPattern = Regex("(url|uri|link|scheme|jump|target|redirect|deeplink|deep_link)", RegexOption.IGNORE_CASE)
+        var modelType: Class<*>? = view.javaClass
+        var modelDepth = 0
+        while (modelType != null && modelType != View::class.java && modelDepth++ < 3) {
+            modelType.declaredFields.filter { linkFieldPattern.containsMatchIn(it.name) }
+                .take(32).forEach { field ->
+                    runCatching {
+                        field.isAccessible = true
+                        val value = field.get(view)
+                        acceptModelLink(value, field.name)
+                        if (value != null && value !is String && value !is Number && value !is Boolean) {
+                            value.javaClass.declaredFields.filter { linkFieldPattern.containsMatchIn(it.name) }
+                                .take(20).forEach { nested ->
+                                    runCatching {
+                                        nested.isAccessible = true
+                                        acceptModelLink(nested.get(value), field.name + "." + nested.name)
+                                    }
+                                }
+                        }
+                    }
+                }
+            modelType = modelType.superclass
+        }
         return found.toList()
     }
 
