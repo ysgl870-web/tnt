@@ -322,7 +322,11 @@ private object InspectorTree {
 
         val found = LinkedHashSet<String>()
         fun accept(value: Any?, source: String) {
-            val raw = value as? String ?: return
+            val raw = when (value) {
+                is String -> value
+                is Uri -> value.toString()
+                else -> return
+            }
             val candidate = raw.trim()
             if (candidate.length !in 8..4096) return
             val safe = normalizeImageUrl(candidate) ?: return
