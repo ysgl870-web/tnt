@@ -8,6 +8,7 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Rect
+import android.graphics.RectF
 import android.net.Uri
 import android.os.Bundle
 import android.text.Spanned
@@ -503,8 +504,9 @@ private class InspectorOverlay private constructor(
                     node.bounds.right - screenLeft,
                     node.bounds.bottom - screenTop
                 )
-                canvas.drawRect(rect, fillPaint)
-                canvas.drawRect(rect, borderPaint)
+                val rectF = RectF(rect)
+                canvas.drawRect(rectF, fillPaint)
+                canvas.drawRect(rectF, borderPaint)
                 if (rect.width() >= dp(context, 18) && rect.height() >= dp(context, 16)) {
                     canvas.drawText((index + 1).toString(), rect.left + dp(context, 2), rect.top + dp(context, 12).toFloat(), numberPaint)
                 }
