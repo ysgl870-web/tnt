@@ -37,9 +37,9 @@ android {
     }
 
     defaultConfig {
-        applicationId = "moe.ono"
+        applicationId = "me.yishiguangliu.tnt"
         buildConfigField("String", "BUILD_UUID", "\"${buildUUID}\"")
-        buildConfigField("String", "TAG", "\"[ono]\"")
+        buildConfigField("String", "TAG", "\"[TNT]\"")
         buildConfigField("long", "BUILD_TIMESTAMP", "${System.currentTimeMillis()}L")
         ndk { abiFilters += "arm64-v8a" }
     }
@@ -157,7 +157,7 @@ android.applicationVariants.all {
         if (this is com.android.build.gradle.internal.api.ApkVariantOutputImpl) {
             val config = project.android.defaultConfig
             val versionName = config.versionName
-            this.outputFileName = "ONO-RELEASE-${versionName}.apk"
+            this.outputFileName = "TNT-Module-${versionName}.apk"
         }
     }
 }
