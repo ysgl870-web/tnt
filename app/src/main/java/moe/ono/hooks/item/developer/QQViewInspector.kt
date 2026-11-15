@@ -745,7 +745,7 @@ private class InspectorOverlay private constructor(
                     if (selected.view.isAttachedToWindow || selected.view.parent != null) {
                         showNode(selected)
                     } else {
-                        Toast.makeText(activity, "该控件已离开当前页面，请刷新控件列表", Toast.LENGTH_SHORT).show()
+                        showInspectorToast("该控件已离开当前页面，请刷新控件列表")
                     }
                 }
             }
@@ -800,7 +800,7 @@ private class InspectorOverlay private constructor(
             val detail = error.message?.take(100)
             val message = if (detail.isNullOrBlank()) error.javaClass.simpleName
                 else "${error.javaClass.simpleName}: $detail"
-            Toast.makeText(activity, "控件操作失败：$message", Toast.LENGTH_SHORT).show()
+            showInspectorToast("控件操作失败：$message")
         }
     }
 
@@ -875,13 +875,13 @@ private class InspectorOverlay private constructor(
         val rules = InspectorControlState.clearPersistentRules()
         val count = InspectorControlState.restoreAll()
         refresh()
-        Toast.makeText(activity, "已恢复隐藏/移除/禁用控件（本次 $count 个，持续规则 $rules 条）", Toast.LENGTH_SHORT).show()
+        showInspectorToast("已恢复隐藏/移除/禁用控件（本次 $count 个，持续规则 $rules 条）")
     }
 
     private fun clearPersistentRules() {
         val count = InspectorControlState.clearPersistentRules()
         refresh()
-        Toast.makeText(activity, "已清除 $count 条持续规则并恢复当前控件", Toast.LENGTH_SHORT).show()
+        showInspectorToast("已清除 $count 条持续规则并恢复当前控件")
     }
 
     private fun canModify(node: InspectorNode): Boolean {
@@ -901,10 +901,10 @@ private class InspectorOverlay private constructor(
             nodes = refreshed
             boxes.setNodes(nodes)
             buildToolbar()
-            Toast.makeText(activity, "已重新扫描 ${nodes.size} 个控件", Toast.LENGTH_SHORT).show()
+            showInspectorToast("已重新扫描 ${nodes.size} 个控件")
         }.onFailure {
             Logger.e("TNT inspector refresh failed", it)
-            Toast.makeText(activity, "扫描失败：${it.javaClass.simpleName}", Toast.LENGTH_SHORT).show()
+            showInspectorToast("扫描失败：${it.javaClass.simpleName}")
         }
     }
 
@@ -913,12 +913,12 @@ private class InspectorOverlay private constructor(
         val visibleNodes = InspectorTree.collect(activity)
         val discovered = (activityLinks + visibleNodes.flatMap { it.links }).distinct()
         if (discovered.isEmpty()) {
-            Toast.makeText(activity, "当前 Activity 暂未发现 Intent 或 WebView 链接", Toast.LENGTH_SHORT).show()
+            showInspectorToast("当前 Activity 暂未发现 Intent 或 WebView 链接")
             return
         }
         discovered.forEach { QQInspectorLinks.add("MANUAL_SAVE", it, "手动保存当前页面") }
         val total = QQInspectorLinks.readAll().size
-        Toast.makeText(activity, "已保存 ${discovered.size} 个页面链接，历史共 ${total} 条", Toast.LENGTH_SHORT).show()
+        showInspectorToast("已保存 ${discovered.size} 个页面链接，历史共 ${total} 条")
     }
 
     private fun showLinkHistory() {
@@ -950,7 +950,7 @@ private class InspectorOverlay private constructor(
             }
             .setNeutralButton("清空全部") { _, _ ->
                 QQInspectorLinks.clear()
-                Toast.makeText(activity, "链接记录已清空", Toast.LENGTH_SHORT).show()
+                showInspectorToast("链接记录已清空")
             }
             .setNegativeButton("关闭", null)
             .show()
@@ -962,7 +962,7 @@ private class InspectorOverlay private constructor(
             .setMessage("即将打开以下链接：\\n$url\\n\\n请确认链接来源可信。")
             .setPositiveButton("确认跳转") { _, _ ->
                 runCatching { activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
-                    .onFailure { Toast.makeText(activity, "无法打开链接：${it.javaClass.simpleName}", Toast.LENGTH_SHORT).show() }
+                    .onFailure { showInspectorToast("无法打开链接：${it.javaClass.simpleName}") }
             }
             .setNegativeButton("取消", null)
             .show()
@@ -1138,36 +1138,36 @@ private class InspectorOverlay private constructor(
                     "隐藏此控件" -> {
                         if (canModify(node) && InspectorControlState.hide(node.view)) {
                             if (node.view.id != View.NO_ID) InspectorControlState.addPersistentRule(activity, node.view, "hide")
-                            Toast.makeText(activity, "控件已隐藏；关闭探测器后仍保持隐藏，可在探测界面点“恢复控件”还原", Toast.LENGTH_SHORT).show()
+                            showInspectorToast("控件已隐藏；关闭探测器后仍保持隐藏，可在探测界面点“恢复控件”还原")
                             refresh()
-                        } else Toast.makeText(activity, "此控件当前不可隐藏", Toast.LENGTH_SHORT).show()
+                        } else showInspectorToast("此控件当前不可隐藏")
                     }
                     "强制移除此控件（可恢复）" -> {
                         if (canModify(node)) {
                             val ruleSaved = node.view.id != View.NO_ID &&
                                 InspectorControlState.addPersistentRule(activity, node.view, "remove")
                             if (InspectorControlState.hide(node.view)) {
-                                Toast.makeText(activity, if (ruleSaved) "控件已移除；关闭探测器后仍保持移除，可在探测界面恢复" else "控件已隐藏；无资源 ID，跨页面持久恢复能力有限", Toast.LENGTH_SHORT).show()
+                                showInspectorToast(if (ruleSaved) "控件已移除；关闭探测器后仍保持移除，可在探测界面恢复" else "控件已隐藏；无资源 ID，跨页面持久恢复能力有限")
                             refresh()
-                            } else Toast.makeText(activity, "此控件当前不可移除", Toast.LENGTH_SHORT).show()
-                        } else Toast.makeText(activity, "此控件当前不可移除", Toast.LENGTH_SHORT).show()
+                            } else showInspectorToast("此控件当前不可移除")
+                        } else showInspectorToast("此控件当前不可移除")
                     }
                     "禁用此控件" -> {
                         if (canModify(node) && InspectorControlState.disable(node.view)) {
-                            Toast.makeText(activity, "控件已临时禁用，点“恢复控件”可还原", Toast.LENGTH_SHORT).show()
+                            showInspectorToast("控件已临时禁用，点“恢复控件”可还原")
                             refresh()
-                        } else Toast.makeText(activity, "此控件当前不可禁用", Toast.LENGTH_SHORT).show()
+                        } else showInspectorToast("此控件当前不可禁用")
                     }
                     "持续隐藏（重进 QQ 仍生效）" -> {
                         val saved = InspectorControlState.addPersistentRule(activity, node.view, "hide")
                         val applied = saved && InspectorControlState.hide(node.view)
-                        Toast.makeText(activity, if (applied) "持续隐藏规则已保存" else "规则保存或应用失败", Toast.LENGTH_SHORT).show()
+                        showInspectorToast(if (applied) "持续隐藏规则已保存" else "规则保存或应用失败")
                         refresh()
                     }
                     "持续禁用（重进 QQ 仍生效）" -> {
                         val saved = InspectorControlState.addPersistentRule(activity, node.view, "disable")
                         val applied = saved && InspectorControlState.disable(node.view)
-                        Toast.makeText(activity, if (applied) "持续禁用规则已保存" else "规则保存或应用失败", Toast.LENGTH_SHORT).show()
+                        showInspectorToast(if (applied) "持续禁用规则已保存" else "规则保存或应用失败")
                         refresh()
                     }
                     "读取此控件文本（可能包含聊天内容）" -> {
@@ -1216,7 +1216,7 @@ private class InspectorOverlay private constructor(
             .setMessage("$label：\\n$url\\n\\n将交给系统或 QQ 打开此地址，请确认链接来源可信。")
             .setPositiveButton("确认跳转") { _, _ ->
                 runCatching { activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
-                    .onFailure { Toast.makeText(activity, "无法打开链接：${it.javaClass.simpleName}", Toast.LENGTH_SHORT).show() }
+                    .onFailure { showInspectorToast("无法打开链接：${it.javaClass.simpleName}") }
             }
             .setNegativeButton("取消", null)
             .show()
@@ -1253,7 +1253,7 @@ private class InspectorOverlay private constructor(
                 .putBoolean(Constants.PrekXXX + "开发者选项/QQ界面控件探测器", false)
                 .apply()
             QQInspectorRuntime.detach(activity)
-            Toast.makeText(activity, "控件探测器已停用，可在 TNT 设置中重新开启", Toast.LENGTH_SHORT).show()
+            showInspectorToast("控件探测器已停用，可在 TNT 设置中重新开启")
         }
     }
 
