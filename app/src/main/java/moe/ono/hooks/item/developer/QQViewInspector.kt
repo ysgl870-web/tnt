@@ -145,10 +145,11 @@ private object QQInspectorRuntime {
         if (activity.isFinishing || activity.isDestroyed) return
         val pkg = runCatching { activity.packageName }.getOrDefault("")
         if (pkg != "com.tencent.mobileqq" && pkg != "com.tencent.tim") return
+        if (activity.javaClass.name.startsWith("moe.ono.")) return
         val content = activity.findViewById<ViewGroup>(android.R.id.content) ?: return
         if (content.findViewWithTag<View>(BUTTON_TAG) != null) return
 
-        val button = TextView(activity).apply {
+        val button = InspectorEntryView(activity).apply {
             tag = BUTTON_TAG
             text = "控件"
             textSize = 13f
@@ -197,7 +198,7 @@ private object InspectorTree {
 
         fun visit(view: View, depth: Int) {
             if (result.size >= MAX_NODES || depth > MAX_DEPTH) return
-            if (view is InspectorEntryView || view is InspectorOverlay || view is InspectorBoxLayer) return
+            if (view is InspectorOverlay || view.tag == "tnt.qq.inspector.entry") return
             if (view.visibility != View.VISIBLE || view.alpha <= 0.03f || !view.isShown) return
 
             val visibleRect = Rect()
@@ -254,7 +255,7 @@ private object InspectorTree {
 
     private fun collectLinks(view: View): List<String> {
         val found = LinkedHashSet<String>()
-        if (view is TextView) {
+        if (view is TextView && view !is EditText) {
             val value = view.text
             if (value is Spanned) {
                 value.getSpans(0, value.length, URLSpan::class.java).forEach { span ->
@@ -336,7 +337,7 @@ private class InspectorOverlay private constructor(
     }
 
     private fun showList() {
-        val labels = nodes.mapIndexed { index, node ->
+        val labels = nodes.take(180).mapIndexed { index, node ->
             "${index + 1}. ${node.className.substringAfterLast('.')}\n" +
                 "${node.resourceId} · ${node.width}×${node.height} · ${node.area}px²"
         }.toTypedArray()
@@ -365,39 +366,45 @@ private class InspectorOverlay private constructor(
             append(" · 启用：").append(node.enabled)
             append("\n子控件数：").append(node.childCount)
             append("\n链接：\n").append(linkText)
-            append("\n\n文本默认隐藏，防止误显示聊天内容。")
+            append("\n\n控件文本默认隐藏，防止误显示聊天内容。")
         }
 
-        val builder = MaterialAlertDialogBuilder(activity)
+        val actions = mutableListOf("复制控件信息")
+        val canReadText = node.view is TextView &&
+            node.view !is EditText &&
+            node.view.transformationMethod !is PasswordTransformationMethod
+        if (canReadText) actions.add("读取此控件文本（可能包含聊天内容）")
+        if (node.links.isNotEmpty()) actions.add("复制第一个链接")
+
+        MaterialAlertDialogBuilder(activity)
             .setTitle("控件详情")
             .setMessage(message)
-            .setPositiveButton("复制控件信息") { _, _ -> copyText(activity, "QQ控件", nodeJson(node).toString(2)) }
-            .setNegativeButton("关闭", null)
-
-        if (node.links.isNotEmpty()) {
-            builder.setNeutralButton("复制第一个链接") { _, _ ->
-                copyText(activity, "QQ链接", node.links.first())
-            }
-        }
-        builder.show()
-
-        if (node.view is TextView && node.view !is EditText) {
-            // Text is only shown after a separate, explicit confirmation.
-            MaterialAlertDialogBuilder(activity)
-                .setTitle("读取此控件文本？")
-                .setMessage("文本可能包含私聊内容、群消息、昵称或其他个人信息。仅在你确认当前页面内容可以读取时继续；密码输入框和编辑框不会读取。")
-                .setPositiveButton("确认读取") { _, _ ->
-                    val text = node.view.text?.toString().orEmpty().take(600)
-                    MaterialAlertDialogBuilder(activity)
-                        .setTitle("控件文本（最多600字符）")
-                        .setMessage(if (text.isBlank()) "（空）" else text)
-                        .setPositiveButton("复制") { _, _ -> copyText(activity, "QQ控件文本", text) }
-                        .setNegativeButton("关闭", null)
-                        .show()
+            .setItems(actions.toTypedArray()) { _, which ->
+                when (actions[which]) {
+                    "复制控件信息" -> copyText(activity, "QQ控件", nodeJson(node).toString(2))
+                    "读取此控件文本（可能包含聊天内容）" -> {
+                        MaterialAlertDialogBuilder(activity)
+                            .setTitle("读取此控件文本？")
+                            .setMessage("文本可能包含私聊内容、群消息、昵称或其他个人信息。仅在你确认当前页面内容可以读取时继续。")
+                            .setPositiveButton("确认读取") { _, _ ->
+                                val text = (node.view as? TextView)?.text?.toString().orEmpty().take(600)
+                                MaterialAlertDialogBuilder(activity)
+                                    .setTitle("控件文本（最多600字符）")
+                                    .setMessage(if (text.isBlank()) "（空）" else text)
+                                    .setPositiveButton("复制") { _, _ -> copyText(activity, "QQ控件文本", text) }
+                                    .setNegativeButton("关闭", null)
+                                    .show()
+                            }
+                            .setNegativeButton("不读取", null)
+                            .show()
+                    }
+                    "复制第一个链接" -> node.links.firstOrNull()?.let {
+                        copyText(activity, "QQ链接", it)
+                    }
                 }
-                .setNegativeButton("不读取", null)
-                .show()
-        }
+            }
+            .setNegativeButton("关闭", null)
+            .show()
     }
 
     private fun nodeJson(node: InspectorNode) = JSONObject()
@@ -606,7 +613,7 @@ private object QQInspectorLinks {
                 val old = JSONArray(moe.ono.config.ConfigManager.cGetString(STORAGE_KEY, "[]"))
                 val next = JSONArray()
                 val first = (old.length() - (MAX_ROWS - 1)).coerceAtLeast(0)
-                for (index in first until old.length()) old.optJSONObject(index)?.let(next::put)
+                for (index in first until old.length()) old.optJSONObject(index)?.let { next.put(it) }
                 next.put(
                     JSONObject()
                         .put("time", System.currentTimeMillis())
