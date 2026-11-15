@@ -396,12 +396,16 @@ private class InspectorOverlay private constructor(
     }
 
     private fun saveCurrentLinks() {
-        val saved = QQInspectorLinks.captureActivity(activity)
+        val activityLinks = QQInspectorLinks.captureActivity(activity)
         val visibleNodes = InspectorTree.collect(activity)
-        val nodeLinks = visibleNodes.flatMap { it.links }.distinct()
-        nodeLinks.forEach { QQInspectorLinks.add("VIEW_LINK", it, "当前页面控件") }
+        val discovered = (activityLinks + visibleNodes.flatMap { it.directLinks }).distinct()
+        if (discovered.isEmpty()) {
+            Toast.makeText(activity, "当前 Activity 暂未发现 Intent 或 WebView 链接", Toast.LENGTH_LONG).show()
+            return
+        }
+        discovered.forEach { QQInspectorLinks.add("MANUAL_SAVE", it, "手动保存当前页面") }
         val total = QQInspectorLinks.readAll().size
-        Toast.makeText(activity, "已保存当前页面链接，当前记录 ${total} 条", Toast.LENGTH_SHORT).show()
+        Toast.makeText(activity, "已保存 ${discovered.size} 个页面链接，历史共 ${total} 条", Toast.LENGTH_SHORT).show()
     }
 
     private fun showLinkHistory() {
