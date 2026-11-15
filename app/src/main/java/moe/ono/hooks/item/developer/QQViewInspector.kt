@@ -23,6 +23,7 @@ import android.webkit.WebView
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -217,6 +218,7 @@ private data class InspectorNode(
     val alpha: Float,
     val childCount: Int,
     val directLinks: List<String>,
+    val imageLinks: List<String>,
     val links: List<String>
 )
 
@@ -255,6 +257,7 @@ private object InspectorTree {
                 }
                 val childCount = (view as? ViewGroup)?.childCount ?: 0
                 val directLinks = collectLinks(view)
+                val imageLinks = collectImageLinks(view)
                 result.add(
                     InspectorNode(
                         view = view,
@@ -272,7 +275,8 @@ private object InspectorTree {
                         alpha = view.alpha,
                         childCount = childCount,
                         directLinks = directLinks,
-                        links = (directLinks + pageLinks).distinct()
+                        imageLinks = imageLinks,
+                        links = (directLinks + pageLinks + imageLinks).distinct()
                     )
                 )
             }
@@ -288,6 +292,66 @@ private object InspectorTree {
         visit(root, 0)
         // Screenshot behavior: smallest controls appear first.
         return result.sortedWith(compareBy<InspectorNode> { it.area }.thenByDescending { it.depth })
+    }
+
+    /**
+     * Best-effort extraction of image source URLs exposed by QQ's visible image views.
+     * This reads only view metadata (tag/contentDescription and URL-like fields); it does
+     * not read message databases, network traffic, cookies, request headers or image bytes.
+     */
+    private fun collectImageLinks(view: View): List<String> {
+        val className = view.javaClass.name
+        val imageLike = view is ImageView ||
+            className.contains("image", ignoreCase = true) ||
+            className.contains("picture", ignoreCase = true) ||
+            className.contains("photo", ignoreCase = true) ||
+            className.contains("pic", ignoreCase = true)
+        if (!imageLike) return emptyList()
+
+        val found = LinkedHashSet<String>()
+        fun accept(value: Any?, source: String) {
+            val raw = value as? String ?: return
+            val candidate = raw.trim()
+            if (candidate.length !in 8..4096) return
+            val safe = QQInspectorLinks.sanitize(candidate) ?: return
+            val uri = runCatching { Uri.parse(safe) }.getOrNull() ?: return
+            if (uri.scheme !in setOf("http", "https")) return
+            val host = uri.host.orEmpty().lowercase(Locale.ROOT)
+            val path = uri.path.orEmpty().lowercase(Locale.ROOT)
+            val imageHint = path.matches(Regex(".*\\.(png|jpe?g|gif|webp|bmp|heic|avif)(?:$|/).*")) ||
+                host.contains("qpic") || host.contains("qlogo") || host.contains("gtimg") ||
+                host.contains("qq.com") || host.contains("qcloud") ||
+                Regex("(image|img|pic|photo|thumb|origin|url|src)", RegexOption.IGNORE_CASE).containsMatchIn(source)
+            if (imageHint && found.add(safe)) {
+                QQInspectorLinks.add("IMAGE_URL", safe, className + "/" + source)
+            }
+        }
+
+        accept(view.contentDescription?.toString(), "contentDescription")
+        accept(view.tag, "tag")
+        if (view is ImageView) {
+            // Some QQ image loaders expose the original URL in a drawable's URI string.
+            accept(view.drawable?.toString(), "drawable")
+        }
+
+        // QQ's message/image widgets sometimes retain their loader model on the view.
+        // Inspect only a small set of URL-like String fields; never recurse into arbitrary objects.
+        var type: Class<*>? = view.javaClass
+        var inspected = 0
+        while (type != null && type != View::class.java && inspected < 4) {
+            type.declaredFields.take(80).forEach { field ->
+                val name = field.name
+                if (!Regex("(url|uri|image|img|pic|photo|origin|source|thumb|path|model|data)", RegexOption.IGNORE_CASE)
+                        .containsMatchIn(name)) return@forEach
+                runCatching {
+                    field.isAccessible = true
+                    accept(field.get(view), name)
+                }
+            }
+            type = type.superclass
+            inspected++
+        }
+        return found.toList()
     }
 
     private fun collectLinks(view: View): List<String> {
@@ -758,6 +822,7 @@ private class InspectorOverlay private constructor(
             if (node.view.isEnabled) actions.add("临时禁用此控件")
         }
         if (links.isNotEmpty()) actions.add("复制第一个链接")
+        if (node.imageLinks.isNotEmpty()) actions.add("复制图片链接（${node.imageLinks.size}）")
         val canReadText = node.view is TextView &&
             node.view !is EditText &&
             node.view.transformationMethod !is PasswordTransformationMethod
@@ -786,6 +851,7 @@ private class InspectorOverlay private constructor(
                         }
                     }
                     "复制第一个链接" -> links.firstOrNull()?.let { copyText(activity, "QQ链接", it) }
+                    "复制图片链接（${node.imageLinks.size}）" -> copyText(activity, "QQ图片链接", node.imageLinks.joinToString("\\n"))
                     "读取此控件文本（可能包含聊天内容）" -> {
                         AlertDialog.Builder(activity)
                             .setTitle("读取此控件文本？")
@@ -824,6 +890,7 @@ private class InspectorOverlay private constructor(
         .put("childCount", node.childCount)
         .put("viewInfo", node.view.toString().take(900))
         .put("directLinks", JSONArray(node.directLinks))
+        .put("imageLinks", JSONArray(node.imageLinks))
         .put("pageAndControlLinks", JSONArray(node.links))
 
     private fun copyTree() {
