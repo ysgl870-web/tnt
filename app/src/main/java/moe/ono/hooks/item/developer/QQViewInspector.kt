@@ -343,8 +343,22 @@ private object InspectorTree {
         accept(view.contentDescription?.toString(), "contentDescription")
         accept(view.tag, "tag")
         if (view is ImageView) {
-            // Some QQ image loaders expose the original URL in a drawable's URI string.
-            accept(view.drawable?.toString(), "drawable")
+            val drawable = view.drawable
+            accept(drawable?.toString(), "drawable")
+            if (drawable != null) {
+                drawable.javaClass.methods.filter { it.parameterTypes.isEmpty() &&
+                    Regex("(uri|url|source|path)", RegexOption.IGNORE_CASE).containsMatchIn(it.name) }
+                    .take(12).forEach { method -> runCatching { accept(method.invoke(drawable), "drawable.${method.name}") } }
+                var drawableType: Class<*>? = drawable.javaClass
+                var depth = 0
+                while (drawableType != null && drawableType != Any::class.java && depth++ < 3) {
+                    drawableType.declaredFields.take(40).forEach { field ->
+                        if (Regex("(uri|url|source|path|image)", RegexOption.IGNORE_CASE).containsMatchIn(field.name))
+                            runCatching { field.isAccessible = true; accept(field.get(drawable), "drawable.${field.name}") }
+                    }
+                    drawableType = drawableType.superclass
+                }
+            }
         }
 
         // QQ's message/image widgets sometimes retain their loader model on the view.
@@ -358,7 +372,15 @@ private object InspectorTree {
                         .containsMatchIn(name)) return@forEach
                 runCatching {
                     field.isAccessible = true
-                    accept(field.get(view), name)
+                    val value = field.get(view)
+                    accept(value, name)
+                    if (value != null && value !is String && value !is Number && value !is Boolean) {
+                        value.javaClass.methods.filter { it.parameterTypes.isEmpty() &&
+                            Regex("(url|uri|image|img|pic|photo|origin|source|thumb|path)", RegexOption.IGNORE_CASE).containsMatchIn(it.name) }
+                            .take(16).forEach { getter -> runCatching { accept(getter.invoke(value), "$name.${getter.name}") } }
+                        value.javaClass.declaredFields.filter { Regex("(url|uri|image|img|pic|photo|origin|source|thumb|path)", RegexOption.IGNORE_CASE).containsMatchIn(it.name) }
+                            .take(24).forEach { nested -> runCatching { nested.isAccessible = true; accept(nested.get(value), "$name.${nested.name}") } }
+                    }
                 }
             }
             type = type.superclass
@@ -752,6 +774,23 @@ private class InspectorOverlay private constructor(
         marginEnd = dp(activity, 4)
     }
 
+    private fun showInspectorToast(message: String) {
+        val rootView = activity.findViewById<ViewGroup>(android.R.id.content) ?: return
+        val toastView = TextView(activity).apply {
+            text = "$message  ×"
+            textSize = 13f
+            setTextColor(0xFFFFFFFF.toInt())
+            gravity = Gravity.CENTER
+            setPadding(dp(activity, 18), dp(activity, 11), dp(activity, 18), dp(activity, 11))
+            background = GradientDrawable().apply { cornerRadius = dp(activity, 22).toFloat(); setColor(0xEE172B43.toInt()); setStroke(dp(activity, 1), 0xFF55BDEB.toInt()) }
+            elevation = dp(activity, 10).toFloat()
+            setOnClickListener { rootView.removeView(this) }
+        }
+        val params = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = dp(activity, 36) }
+        rootView.addView(toastView, params)
+        toastView.postDelayed({ runCatching { (toastView.parent as? ViewGroup)?.removeView(toastView) } }, 1500L)
+    }
+
     private fun runSafely(action: () -> Unit) {
         try {
             if (activity.isFinishing || activity.isDestroyed) return
@@ -787,7 +826,7 @@ private class InspectorOverlay private constructor(
         boxes.setMultiSelect(multiSelect)
         if (multiSelect) { pickMode = true; boxes.setPickMode(true) }
         buildToolbar()
-        Toast.makeText(activity, if (multiSelect) "多选已开启，橙色边框为已选控件" else "多选已关闭", Toast.LENGTH_SHORT).show()
+        showInspectorToast(if (multiSelect) "多选已开启，橙色边框为已选控件" else "多选已关闭")
     }
 
     private fun showBatchActions() {
@@ -802,7 +841,7 @@ private class InspectorOverlay private constructor(
                 }
                 val count = targets.size
                 selectedViews.clear(); boxes.setSelectedViews(emptyList()); refresh()
-                Toast.makeText(activity, "已处理 ${count} 个控件，可使用恢复控件还原", Toast.LENGTH_SHORT).show()
+                showInspectorToast("已处理 ${count} 个控件，可使用恢复控件还原")
             }.show()
     }
 
@@ -1088,7 +1127,7 @@ private class InspectorOverlay private constructor(
                     "选择同一图层全部控件" -> {
                         multiSelect = true; pickMode = true; boxes.setPickMode(true); boxes.setMultiSelect(true)
                         boxes.setSelectedViews(peers.map { it.view })
-                        Toast.makeText(activity, "已选中同一图层 ${peers.size} 个控件", Toast.LENGTH_SHORT).show()
+                        showInspectorToast("已选中同一图层 ${peers.size} 个控件")
                         buildToolbar()
                     }
                     "隐藏此控件" -> {
