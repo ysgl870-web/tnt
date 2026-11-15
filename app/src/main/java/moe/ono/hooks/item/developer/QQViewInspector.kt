@@ -754,13 +754,13 @@ private class InspectorOverlay private constructor(
         if (rows.isEmpty()) {
             AlertDialog.Builder(activity)
                 .setTitle("QQ 链接记录")
-                .setMessage("暂时没有记录。打开 QQ 页面后点击「保存链接」，或浏览内置网页触发自动记录。")
+                .setMessage("暂无记录。开启探测器后浏览 QQ 页面，链接会自动保存；也可手动保存当前页面全部链接。")
                 .setPositiveButton("知道了", null)
                 .show()
             return
         }
         val labels = rows.asReversed().mapIndexed { index, row ->
-            val date = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(row.optLong("time")))
+            val date = SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault()).format(Date(row.optLong("time")))
             "$date · ${row.optString("kind")} · ${row.optString("source")}\n${row.optString("url")}"
         }.toTypedArray()
         AlertDialog.Builder(activity)
@@ -770,16 +770,9 @@ private class InspectorOverlay private constructor(
                 val url = row.optString("url")
                 AlertDialog.Builder(activity)
                     .setTitle("链接详情")
-                    .setMessage("来源：${row.optString("source")}\\n类型：${row.optString("kind")}\\n\\n$url")
+                    .setMessage("触发位置：${row.optString("source")}\n类型：${row.optString("kind")}\n\n$url")
                     .setPositiveButton("复制") { _, _ -> copyText(activity, "QQ链接", url) }
                     .setNeutralButton("跳转") { _, _ -> confirmHistoryOpen(url) }
-                    .setNegativeButton("关闭", null)
-                    .show()
-            }
-            .setNeutralButton("清空记录") { _, _ ->
-                        QQInspectorLinks.clear()
-                        Toast.makeText(activity, "链接记录已清空", Toast.LENGTH_SHORT).show()
-                    }
                     .setNegativeButton("关闭", null)
                     .show()
             }
