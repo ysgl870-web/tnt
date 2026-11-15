@@ -6,6 +6,7 @@ import android.app.Application
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Rect
@@ -397,7 +398,10 @@ private object InspectorControlState {
         val visibility: Int,
         val enabled: Boolean,
         val clickable: Boolean,
-        val longClickable: Boolean
+        val longClickable: Boolean,
+        val parent: ViewGroup?,
+        val index: Int,
+        val layoutParams: ViewGroup.LayoutParams?
     )
 
     private val saved = WeakHashMap<View, SavedState>()
@@ -408,7 +412,10 @@ private object InspectorControlState {
                 visibility = view.visibility,
                 enabled = view.isEnabled,
                 clickable = view.isClickable,
-                longClickable = view.isLongClickable
+                longClickable = view.isLongClickable,
+                parent = view.parent as? ViewGroup,
+                index = (view.parent as? ViewGroup)?.indexOfChild(view) ?: -1,
+                layoutParams = view.layoutParams
             )
         }
     }
@@ -418,6 +425,14 @@ private object InspectorControlState {
         if (view.parent == null) return false
         remember(view)
         view.visibility = View.GONE
+        true
+    }.getOrDefault(false)
+
+    @Synchronized
+    fun remove(view: View): Boolean = runCatching {
+        val parent = view.parent as? ViewGroup ?: return false
+        remember(view)
+        parent.removeView(view)
         true
     }.getOrDefault(false)
 
@@ -437,6 +452,9 @@ private object InspectorControlState {
         saved.clear()
         entries.forEach { (view, state) ->
             runCatching {
+                if (view.parent == null && state.parent != null && state.index >= 0) {
+                    state.parent.addView(view, state.index.coerceAtMost(state.parent.childCount), state.layoutParams)
+                }
                 view.visibility = state.visibility
                 view.isEnabled = state.enabled
                 view.isClickable = state.clickable
@@ -632,7 +650,7 @@ private class InspectorOverlay private constructor(
         toolbar.addView(toolButton("刷新") { refresh() }, buttonParams())
         toolbar.addView(toolButton(if (bordersVisible) "边框:开" else "边框:关") { toggleBorders() }, buttonParams())
         toolbar.addView(toolButton("恢复控件") { restoreControls() }, buttonParams())
-        toolbar.addView(toolButton("保存链接") { saveCurrentLinks() }, buttonParams())
+        toolbar.addView(toolButton("保存全部链接") { saveCurrentLinks() }, buttonParams())
         toolbar.addView(toolButton("链接记录") { showLinkHistory() }, buttonParams())
         toolbar.addView(toolButton("复制结构") { copyTree() }, buttonParams())
         toolbar.addView(toolButton("停用探测") { disableFeature() }, buttonParams())
@@ -721,7 +739,7 @@ private class InspectorOverlay private constructor(
     private fun saveCurrentLinks() {
         val activityLinks = QQInspectorLinks.captureActivity(activity)
         val visibleNodes = InspectorTree.collect(activity)
-        val discovered = (activityLinks + visibleNodes.flatMap { it.directLinks }).distinct()
+        val discovered = (activityLinks + visibleNodes.flatMap { it.links }).distinct()
         if (discovered.isEmpty()) {
             Toast.makeText(activity, "当前 Activity 暂未发现 Intent 或 WebView 链接", Toast.LENGTH_LONG).show()
             return
@@ -965,7 +983,7 @@ private class InspectorOverlay private constructor(
             val minArea = (dp(context, 9) * dp(context, 9)).toLong()
             drawnNodes = value.filter {
                 it.area >= minArea && (it.clickable || it.longClickable || it.directLinks.isNotEmpty() ||
-                    (it.focusable && it.childCount == 0))
+                    it.imageLinks.isNotEmpty() || (it.focusable && it.childCount == 0))
             }.take(120)
             invalidate()
         }
