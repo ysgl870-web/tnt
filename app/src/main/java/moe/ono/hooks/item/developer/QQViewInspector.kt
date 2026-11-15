@@ -29,6 +29,8 @@ import de.robv.android.xposed.XposedBridge
 import moe.ono.hooks._base.BaseClickableFunctionHookItem
 import moe.ono.hooks._base.BaseSwitchFunctionHookItem
 import moe.ono.hooks._core.annotation.HookItem
+import moe.ono.config.ConfigManager
+import moe.ono.constants.Constants
 import moe.ono.util.ContextUtils
 import moe.ono.util.HostInfo
 import moe.ono.util.Logger
@@ -62,7 +64,7 @@ class QQViewInspector : BaseSwitchFunctionHookItem() {
     override fun entry(classLoader: ClassLoader) {
         QQInspectorRuntime.install()
         QQInspectorLinks.install(classLoader)
-        runCatching { ContextUtils.getCurrentActivity()?.let(QQInspectorRuntime::attach) }
+        runCatching { ContextUtils.getCurrentActivity()?.let { if (ConfigManager.getDefaultConfig().getBooleanOrFalse(Constants.PrekXXX + path)) QQInspectorRuntime.attach(it) } }
         Logger.i("TNT QQViewInspector installed")
     }
 }
@@ -128,7 +130,7 @@ private object QQInspectorRuntime {
                 app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
                     override fun onActivityCreated(activity: Activity, state: Bundle?) = Unit
                     override fun onActivityStarted(activity: Activity) = Unit
-                    override fun onActivityResumed(activity: Activity) = attach(activity)
+                    override fun onActivityResumed(activity: Activity) = if (isEnabled()) attach(activity) else detach(activity)
                     override fun onActivityPaused(activity: Activity) = Unit
                     override fun onActivityStopped(activity: Activity) = Unit
                     override fun onActivitySaveInstanceState(activity: Activity, state: Bundle) = Unit
@@ -141,7 +143,20 @@ private object QQInspectorRuntime {
         }
     }
 
+    private fun isEnabled(): Boolean = runCatching {
+        ConfigManager.getDefaultConfig().getBooleanOrFalse(Constants.PrekXXX + "开发者选项/QQ界面控件探测器")
+    }.getOrDefault(false)
+
+    fun detach(activity: Activity) {
+        val content = activity.findViewById<ViewGroup>(android.R.id.content) ?: return
+        for (index in content.childCount - 1 downTo 0) {
+            val child = content.getChildAt(index)
+            if (child is InspectorOverlay || child.tag == BUTTON_TAG) content.removeViewAt(index)
+        }
+    }
+
     fun attach(activity: Activity) {
+        if (!isEnabled()) return
         if (activity.isFinishing || activity.isDestroyed) return
         val pkg = runCatching { activity.packageName }.getOrDefault("")
         if (pkg != "com.tencent.mobileqq" && pkg != "com.tencent.tim") return
@@ -605,6 +620,10 @@ private object QQInspectorLinks {
     }
 
     fun add(kind: String, raw: String, source: String) {
+        val enabled = runCatching {
+            ConfigManager.getDefaultConfig().getBooleanOrFalse(Constants.PrekXXX + "开发者选项/QQ界面控件探测器")
+        }.getOrDefault(false)
+        if (!enabled) return
         val safe = sanitize(raw) ?: return
         synchronized(lock) {
             if (!recent.add(safe)) return
