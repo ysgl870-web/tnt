@@ -800,7 +800,7 @@ private class InspectorOverlay private constructor(
             val detail = error.message?.take(100)
             val message = if (detail.isNullOrBlank()) error.javaClass.simpleName
                 else "${error.javaClass.simpleName}: $detail"
-            Toast.makeText(activity, "控件操作失败：$message", Toast.LENGTH_LONG).show()
+            Toast.makeText(activity, "控件操作失败：$message", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -835,7 +835,8 @@ private class InspectorOverlay private constructor(
         AlertDialog.Builder(activity).setTitle("批量操作 · ${targets.size} 个控件")
             .setItems(arrayOf("批量隐藏", "批量移除（可恢复）", "批量禁用", "取消选择")) { _, which ->
                 when (which) {
-                    0, 1 -> targets.forEach { InspectorControlState.hide(it.view) }
+                    0 -> targets.forEach { InspectorControlState.hide(it.view) }
+                    1 -> targets.forEach { InspectorControlState.remove(it.view) }
                     2 -> targets.forEach { InspectorControlState.disable(it.view) }
                     3 -> { selectedViews.clear(); boxes.setSelectedViews(emptyList()); buildToolbar(); return@setItems }
                 }
@@ -1092,7 +1093,7 @@ private class InspectorOverlay private constructor(
                     text = "${index + 1}. ${peer.className.substringAfterLast('.')} · ${peer.width}×${peer.height}  ›"
                     textSize = 13f; setTextColor(0xFF075A9D.toInt()); setPadding(dp(activity, 12), dp(activity, 10), dp(activity, 12), dp(activity, 10))
                     background = GradientDrawable().apply { cornerRadius = dp(activity, 8).toFloat(); setColor(0xFFEAF3FC.toInt()) }
-                    setOnClickListener { dialog.dismiss(); showNode(peer) }
+                    setOnClickListener { showNode(peer) }
                 }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             }
         }
