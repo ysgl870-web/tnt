@@ -1,15 +1,15 @@
 <resources>
     <string name="resources_inject_state">Resources injection success</string>
-    <string name="app_name">ovo</string>
+    <string name="app_name">TNT</string>
     <string name="packethelper">PacketHelper</string>
     <string name="title_activity_stub">StubActivity</string>
     <string name="ouom_pub">\@ouom_pub</string>
-    <string name="xposeddescription">QQ, Now with Superpowers\nBy cwuom@github</string>
+    <string name="xposeddescription">TNT · QQNT Android 增强与开发者工具\n二次开发：亦是光流\n基于 ONO 开源项目</string>
     <string name="fake_file">Fake File</string>
     <string name="ono_need_find_method">ONO需要寻找被混淆的方法</string>
     <string name="click_to_find_method">查找</string>
     <string name="github">GitHub</string>
-    <string name="cwuom_ono">cwuom/ono</string>
+    <string name="cwuom_ono">TNT · 亦是光流</string>
     <string name="title_activity_ouosetting_step2">OUOSettingActivityStep2</string>
     <string name="qq_message_tracker">Message Tracker</string>
     <string name="get_channel_ark">Get Channel Ark</string>
