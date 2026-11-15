@@ -222,6 +222,7 @@ private data class InspectorNode(
     val childCount: Int,
     val directLinks: List<String>,
     val imageLinks: List<String>,
+    val cardJsons: List<String>,
     val links: List<String>
 )
 
@@ -270,6 +271,7 @@ private object InspectorTree {
                 val childCount = (view as? ViewGroup)?.childCount ?: 0
                 val directLinks = collectLinks(view)
                 val imageLinks = collectImageLinks(view)
+                val cardJsons = collectCardJson(view)
                 result.add(
                     InspectorNode(
                         view = view,
@@ -288,6 +290,7 @@ private object InspectorTree {
                         childCount = childCount,
                         directLinks = directLinks,
                         imageLinks = imageLinks,
+                        cardJsons = cardJsons,
                         links = (directLinks + pageLinks + imageLinks).distinct()
                     )
                 )
@@ -391,6 +394,52 @@ private object InspectorTree {
             inspected++
         }
         return found.toList()
+    }
+
+    private fun collectCardJson(view: View): List<String> {
+        val className = view.javaClass.name
+        val cardLike = Regex("(ark|card|struct|json|share)", RegexOption.IGNORE_CASE).containsMatchIn(className)
+        val found = LinkedHashSet<String>()
+        fun accept(value: Any?) {
+            val raw = when (value) {
+                is String -> value
+                is JSONObject, is JSONArray -> value.toString()
+                else -> return
+            }.trim()
+            if (raw.length !in 2..128_000) return
+            val parsed = runCatching {
+                val unwrapped = if (raw.startsWith("\"") && raw.endsWith("\"")) org.json.JSONTokener(raw).nextValue()?.toString() ?: raw else raw
+                when {
+                    unwrapped.startsWith("{") -> JSONObject(unwrapped).toString(2)
+                    unwrapped.startsWith("[") -> JSONArray(unwrapped).toString(2)
+                    else -> null
+                }
+            }.getOrNull() ?: return
+            if (cardLike || Regex("(ark|app|meta|prompt|view|config|jumpUrl|qqdocurl|schema)", RegexOption.IGNORE_CASE).containsMatchIn(parsed)) found.add(parsed)
+        }
+        if (view is TextView && !view.text.isNullOrBlank()) accept(view.text.toString())
+        accept(view.tag)
+        accept(view.contentDescription)
+        var type: Class<*>? = view.javaClass
+        var depth = 0
+        while (type != null && type != View::class.java && depth++ < 4) {
+            type.declaredFields.filter { Regex("(ark|card|json|payload|extra|meta|struct|share)", RegexOption.IGNORE_CASE).containsMatchIn(it.name) }
+                .take(48).forEach { field ->
+                    runCatching {
+                        field.isAccessible = true
+                        val value = field.get(view)
+                        accept(value)
+                        if (value != null && value !is String && value !is Number && value !is Boolean) {
+                            value.javaClass.declaredFields.filter { Regex("(ark|card|json|payload|extra|meta|struct|share)", RegexOption.IGNORE_CASE).containsMatchIn(it.name) }
+                                .take(24).forEach { nested -> runCatching { nested.isAccessible = true; accept(nested.get(value)) } }
+                            value.javaClass.methods.filter { it.parameterTypes.isEmpty() && Regex("(ark|card|json|payload|extra|meta|struct|share)", RegexOption.IGNORE_CASE).containsMatchIn(it.name) }
+                                .take(12).forEach { getter -> runCatching { accept(getter.invoke(value)) } }
+                        }
+                    }
+                }
+            type = type.superclass
+        }
+        return found.take(6)
     }
 
     private fun collectLinks(view: View): List<String> {
@@ -744,6 +793,7 @@ private class InspectorOverlay private constructor(
         }
         boxes.setOnNodeSelected { selected ->
             if (activity.isFinishing || activity.isDestroyed) return@setOnNodeSelected
+            boxes.setSelectedViews(listOf(selected.view))
             activity.runOnUiThread {
                 runSafely {
                     if (selected.view.isAttachedToWindow || selected.view.parent != null) {
@@ -1003,6 +1053,7 @@ private class InspectorOverlay private constructor(
         }.distinctBy { it.view }
         val controlLinks = peers.flatMap { it.directLinks }.distinct()
         val imageLinks = peers.flatMap { it.imageLinks }.distinct()
+        val cardJsons = peers.flatMap { it.cardJsons }.distinct()
         val pageLinks = peers.flatMap { peer ->
             peer.links.filterNot { it in peer.directLinks || it in peer.imageLinks }
         }.distinct()
@@ -1042,10 +1093,18 @@ private class InspectorOverlay private constructor(
             } else if (peers.any { it.view is ImageView }) {
                 append("\n\n图片：已识别图片控件，但 QQ 未向当前视图暴露可用直链。")
             }
-            append("\n\n控件文本默认隐藏；仅在你明确确认后读取。")
+            if (cardJsons.isNotEmpty()) {
+                append("\n\nArk / 卡片 JSON：已识别 ").append(cardJsons.size).append(" 份结构数据")
+                append("\n").append(cardJsons.first().take(1800))
+            } else append("\n\nArk / 卡片 JSON：当前视图未暴露可识别的卡片结构")
+            append("\n\n控件文本默认隐藏；仅在你明确确认后读取。')
         }
 
         val actions = mutableListOf("复制控件信息")
+        if (cardJsons.isNotEmpty()) {
+            actions.add("复制 Ark 卡片 JSON")
+            if (cardJsons.size > 1) cardJsons.indices.forEach { actions.add("复制卡片 JSON ${it + 1}") }
+        }
         if (peers.size > 1) actions.add("选择同一图层全部控件")
         if (canModify(node)) {
             actions.add("隐藏此控件")
@@ -1072,7 +1131,7 @@ private class InspectorOverlay private constructor(
         val content = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(activity, 16), dp(activity, 12), dp(activity, 16), dp(activity, 12))
-            setBackgroundColor(0xFFF4F7FB.toInt())
+            setBackgroundColor(0xEAF4F7FB.toInt())
         }
         val detailText = TextView(activity).apply {
             text = message
@@ -1082,8 +1141,8 @@ private class InspectorOverlay private constructor(
             setPadding(dp(activity, 10), dp(activity, 10), dp(activity, 10), dp(activity, 14))
             background = GradientDrawable().apply {
                 cornerRadius = dp(activity, 12).toFloat()
-                setColor(0xFFFFFFFF.toInt())
-                setStroke(dp(activity, 1), 0xFFDCE6F0.toInt())
+                setColor(0xEFFFFFFF.toInt())
+                setStroke(dp(activity, 1), 0xB8DCE6F0.toInt())
             }
             setTextIsSelectable(true)
         }
@@ -1123,8 +1182,8 @@ private class InspectorOverlay private constructor(
                 setPadding(dp(activity, 14), dp(activity, 13), dp(activity, 14), dp(activity, 13))
                 background = GradientDrawable().apply {
                     cornerRadius = dp(activity, 9).toFloat()
-                    setColor(0xFFE7F2FC.toInt())
-                    setStroke(dp(activity, 1), 0xFFC9DFF2.toInt())
+                    setColor(0xE6E7F2FC.toInt())
+                    setStroke(dp(activity, 1), 0xB8C9DFF2.toInt())
                 }
                 isClickable = true
                 setOnClickListener {
@@ -1133,6 +1192,7 @@ private class InspectorOverlay private constructor(
                     runSafely {
                 when (actions[which]) {
                     "复制控件信息" -> copyText(activity, "QQ控件", nodeJson(node).toString(2))
+                    "复制 Ark 卡片 JSON" -> copyText(activity, "Ark 卡片 JSON", cardJsons.firstOrNull().orEmpty())
                     "选择同一图层全部控件" -> {
                         multiSelect = true; pickMode = true; boxes.setPickMode(true); boxes.setMultiSelect(true)
                         boxes.setSelectedViews(peers.map { it.view })
@@ -1195,11 +1255,13 @@ private class InspectorOverlay private constructor(
                         val copyLink = Regex("^复制链接 (\\d+)$").matchEntire(label)?.groupValues?.get(1)?.toIntOrNull()
                         val openLink = Regex("^跳转链接 (\\d+)（需确认）$").matchEntire(label)?.groupValues?.get(1)?.toIntOrNull()
                         val copyImage = Regex("^复制图片直链 (\\d+)$").matchEntire(label)?.groupValues?.get(1)?.toIntOrNull()
+                        val copyCard = Regex("^复制卡片 JSON (\\d+)$").matchEntire(label)?.groupValues?.get(1)?.toIntOrNull()
                         val openImage = Regex("^打开图片 (\\d+)（需确认）$").matchEntire(label)?.groupValues?.get(1)?.toIntOrNull()
                         when {
                             copyLink != null -> links.getOrNull(copyLink - 1)?.let { copyText(activity, "QQ链接", it) }
                             openLink != null -> links.getOrNull(openLink - 1)?.let { confirmOpenLink(it, "页面链接") }
                             copyImage != null -> imageLinks.getOrNull(copyImage - 1)?.let { copyText(activity, "QQ图片直链", it) }
+                            copyCard != null -> cardJsons.getOrNull(copyCard - 1)?.let { copyText(activity, "Ark 卡片 JSON", it) }
                             openImage != null -> imageLinks.getOrNull(openImage - 1)?.let { confirmOpenLink(it, "图片直链") }
                         }
                     }
@@ -1212,6 +1274,13 @@ private class InspectorOverlay private constructor(
             ).apply { topMargin = dp(activity, 6) })
         }
         dialog.show()
+        dialog.window?.let { window ->
+            window.setBackgroundDrawableResource(android.R.color.transparent)
+            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            val attrs = window.attributes
+            attrs.dimAmount = 0.22f
+            window.attributes = attrs
+        }
     }
 
     private fun confirmOpenLink(url: String, label: String) {
@@ -1243,6 +1312,7 @@ private class InspectorOverlay private constructor(
         .put("viewInfo", node.view.toString().take(900))
         .put("directLinks", JSONArray(node.directLinks))
         .put("imageLinks", JSONArray(node.imageLinks))
+        .put("arkCardJson", JSONArray(node.cardJsons))
         .put("pageAndControlLinks", JSONArray(node.links))
 
     private fun copyTree() {
@@ -1309,7 +1379,7 @@ private class InspectorOverlay private constructor(
         private var multiSelect = false
         private val selectedViews = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<View, Boolean>())
         private var onSelectionChanged: ((Set<View>) -> Unit)? = null
-        fun setMultiSelect(enabled: Boolean) { multiSelect = enabled; if (!enabled) selectedViews.clear(); invalidate(); onSelectionChanged?.invoke(selectedViews.toSet()) }
+        fun setMultiSelect(enabled: Boolean) { multiSelect = enabled; invalidate(); onSelectionChanged?.invoke(selectedViews.toSet()) }
         fun setOnSelectionChanged(listener: (Set<View>) -> Unit) { onSelectionChanged = listener }
         fun setSelectedViews(views: Collection<View>) { selectedViews.clear(); selectedViews.addAll(views); invalidate(); onSelectionChanged?.invoke(selectedViews.toSet()) }
 
@@ -1399,7 +1469,13 @@ private class InspectorOverlay private constructor(
                             if (multiSelect) {
                                 if (!selectedViews.add(down.view)) selectedViews.remove(down.view)
                                 invalidate(); onSelectionChanged?.invoke(selectedViews.toSet())
-                            } else onSelected?.invoke(down)
+                            } else {
+                                selectedViews.clear()
+                                selectedViews.add(down.view)
+                                invalidate()
+                                onSelectionChanged?.invoke(selectedViews.toSet())
+                                onSelected?.invoke(down)
+                            }
                         }
                         return true
                     }
