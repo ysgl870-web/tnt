@@ -843,6 +843,8 @@ private class InspectorOverlay private constructor(
         toolbar.addView(toolButton(if (bordersVisible) "边框:开" else "边框:关") { toggleBorders() }, buttonParams())
         toolbar.addView(toolButton("恢复控件") { restoreControls() }, buttonParams())
         toolbar.addView(toolButton("清除持续规则") { clearPersistentRules() }, buttonParams())
+        toolbar.addView(toolButton("扫描本页") { scanCurrentPage() }, buttonParams())
+        toolbar.addView(toolButton("拉取卡片") { pullCardData() }, buttonParams())
         toolbar.addView(toolButton("保存全部链接") { saveCurrentLinks() }, buttonParams())
         toolbar.addView(toolButton("链接记录") { showLinkHistory() }, buttonParams())
         toolbar.addView(toolButton("复制结构") { copyTree() }, buttonParams())
@@ -985,6 +987,89 @@ private class InspectorOverlay private constructor(
         }.onFailure {
             Logger.e("TNT inspector refresh failed", it)
             showInspectorToast("扫描失败：${it.javaClass.simpleName}")
+        }
+    }
+
+
+    /** Re-scan visible views and aggregate links, image sources and Ark payloads. */
+    private fun scanCurrentPage() {
+        runSafely {
+            val activityLinks = QQInspectorLinks.captureActivity(activity)
+            val scanned = InspectorTree.collect(activity)
+            nodes = scanned
+            boxes.setNodes(nodes)
+            val links = (activityLinks + scanned.flatMap { it.directLinks + it.links }).distinct()
+            val images = scanned.flatMap { it.imageLinks }.distinct()
+            val cards = scanned.flatMap { it.cardJsons }.distinct()
+            val report = buildString {
+                append("TNT 当前页面扫描结果")
+                append("\n控件：").append(scanned.size)
+                append("\n跳转 / 页面链接：").append(links.size)
+                append("\n图片直链：").append(images.size)
+                append("\nArk 卡片 JSON：").append(cards.size)
+                append("\n\n【跳转链接】")
+                append(if (links.isEmpty()) "\n未发现" else "\n" + links.joinToString("\n"))
+                append("\n\n【图片直链】")
+                append(if (images.isEmpty()) "\n未发现可见原始直链" else "\n" + images.joinToString("\n"))
+                append("\n\n【Ark 卡片 JSON】")
+                if (cards.isEmpty()) append("\n未从当前可见控件模型中提取到 JSON")
+                else cards.forEachIndexed { index, json -> append("\n\n--- 卡片 ").append(index + 1).append(" ---\n").append(json) }
+            }
+            val scroll = android.widget.ScrollView(activity).apply {
+                isFillViewport = false
+                addView(TextView(activity).apply {
+                    text = report; textSize = 13f; setTextColor(0xFF172B43.toInt())
+                    setTextIsSelectable(true)
+                    setPadding(dp(activity, 16), dp(activity, 14), dp(activity, 16), dp(activity, 18))
+                }, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            }
+            AlertDialog.Builder(activity)
+                .setTitle("当前页面扫描 · ${scanned.size} 个控件")
+                .setView(scroll)
+                .setPositiveButton("复制扫描结果") { _, _ -> copyText(activity, "TNT 页面扫描结果", report) }
+                .setNeutralButton("复制全部卡片 JSON") { _, _ ->
+                    if (cards.isEmpty()) showInspectorToast("当前页面没有识别到 Ark 卡片 JSON")
+                    else copyText(activity, "Ark 卡片 JSON", cards.joinToString("\n\n"))
+                }
+                .setNegativeButton("关闭", null)
+                .show()
+            buildToolbar()
+        }
+    }
+
+    /** Pull refreshes the live view hierarchy and exposed models, not authenticated network traffic. */
+    private fun pullCardData() {
+        runSafely {
+            val scanned = InspectorTree.collect(activity)
+            nodes = scanned
+            boxes.setNodes(nodes)
+            val cards = scanned.flatMap { it.cardJsons }.distinct()
+            if (cards.isEmpty()) {
+                showInspectorToast("已重新拉取当前页面数据，但 QQ 未向可见控件暴露卡片 JSON")
+                buildToolbar()
+                return@runSafely
+            }
+            val combined = cards.mapIndexed { index, json -> "/* Ark Card ${index + 1} */\n$json" }.joinToString("\n\n")
+            AlertDialog.Builder(activity)
+                .setTitle("已拉取 ${cards.size} 份卡片数据")
+                .setMessage("已从当前页面控件及其浅层数据模型重新提取。可复制全部内容，或在单个控件详情中复制指定卡片。")
+                .setPositiveButton("复制全部") { _, _ -> copyText(activity, "Ark 卡片 JSON", combined) }
+                .setNeutralButton("查看 JSON") { _, _ ->
+                    val view = TextView(activity).apply {
+                        text = combined; textSize = 12f; setTextColor(0xFF172B43.toInt())
+                        setTextIsSelectable(true)
+                        setPadding(dp(activity, 16), dp(activity, 12), dp(activity, 16), dp(activity, 12))
+                    }
+                    val scroll = android.widget.ScrollView(activity).apply {
+                        addView(view, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+                    }
+                    AlertDialog.Builder(activity).setTitle("Ark 卡片 JSON").setView(scroll)
+                        .setPositiveButton("复制") { _, _ -> copyText(activity, "Ark 卡片 JSON", combined) }
+                        .setNegativeButton("关闭", null).show()
+                }
+                .setNegativeButton("关闭", null)
+                .show()
+            buildToolbar()
         }
     }
 
@@ -1172,12 +1257,10 @@ private class InspectorOverlay private constructor(
             }
             setTextIsSelectable(true)
         }
-        val detailScroll = android.widget.ScrollView(activity).apply {
-            isFillViewport = false
-            addView(detailText, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        }
-        content.addView(detailScroll, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, dp(activity, 260)
+        // Use one vertical scroller for the entire detail panel. Nested ScrollViews
+        // trapped gestures inside the fixed-height text preview.
+        content.addView(detailText, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
         ))
         if (peers.size > 1) {
             content.addView(TextView(activity).apply { text = "同一图层控件（点击单项查看详情）"; textSize = 13f; setTextColor(0xFF48627D.toInt()); setPadding(0, dp(activity, 10), 0, dp(activity, 4)) })
@@ -1306,6 +1389,8 @@ private class InspectorOverlay private constructor(
             val attrs = window.attributes
             attrs.dimAmount = 0.22f
             window.attributes = attrs
+            val metrics = activity.resources.displayMetrics
+            window.setLayout((metrics.widthPixels * 0.94f).toInt(), (metrics.heightPixels * 0.82f).toInt())
         }
     }
 
