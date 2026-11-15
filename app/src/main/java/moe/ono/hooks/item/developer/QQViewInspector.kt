@@ -183,21 +183,19 @@ private object QQInspectorRuntime {
         val content = activity.findViewById<ViewGroup>(android.R.id.content) ?: return
         if (content.findViewWithTag<View>(BUTTON_TAG) != null) return
 
-        val button = InspectorEntryView(activity).apply {
+        val button = InspectorEntryView(activity) {
+            InspectorOverlay.open(activity)
+        }.apply {
             tag = BUTTON_TAG
-            text = "控件"
-            textSize = 13f
-            setTextColor(0xFFFFFFFF.toInt())
-            setBackgroundColor(0xE52683C6.toInt())
-            gravity = Gravity.CENTER
-            elevation = dp(activity, 8).toFloat()
+            contentDescription = "TNT 控件探测器，按住可拖动，点击打开"
+            elevation = dp(activity, 12).toFloat()
             isClickable = true
             isFocusable = true
-            setPadding(dp(activity, 10), dp(activity, 6), dp(activity, 10), dp(activity, 6))
-            setOnClickListener { InspectorOverlay.open(activity) }
         }
-        val lp = FrameLayout.LayoutParams(dp(activity, 48), dp(activity, 40), Gravity.END or Gravity.CENTER_VERTICAL)
-        lp.marginEnd = dp(activity, 6)
+        val size = dp(activity, 54)
+        val lp = FrameLayout.LayoutParams(size, size, Gravity.END or Gravity.CENTER_VERTICAL).apply {
+            marginEnd = dp(activity, 10)
+        }
         content.addView(button, lp)
     }
 }
@@ -385,7 +383,129 @@ private object InspectorControlState {
     }
 }
 
-private class InspectorEntryView(context: Context) : TextView(context)
+/**
+ * Draggable TNT launcher. A short tap opens the inspector; a drag only moves the
+ * floating launcher and never activates the underlying QQ view.
+ */
+private class InspectorEntryView(
+    context: Context,
+    private val onClick: () -> Unit
+) : View(context) {
+    private val density = resources.displayMetrics.density
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val touchSlop = android.view.ViewConfiguration.get(context).scaledTouchSlop
+    private var downRawX = 0f
+    private var downRawY = 0f
+    private var startTranslationX = 0f
+    private var startTranslationY = 0f
+    private var dragged = false
+
+    init {
+        setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val w = width.toFloat()
+        val h = height.toFloat()
+        val inset = 2.5f * density
+        val bounds = RectF(inset, inset, w - inset, h - inset)
+
+        // ONO-inspired midnight-blue glass badge with cyan edge lighting.
+        paint.style = Paint.Style.FILL
+        paint.shader = android.graphics.LinearGradient(
+            0f, 0f, w, h,
+            intArrayOf(0xFF142D55.toInt(), 0xFF075A9D.toInt(), 0xFF102447.toInt()),
+            null, android.graphics.Shader.TileMode.CLAMP
+        )
+        canvas.drawRoundRect(bounds, 17f * density, 17f * density, paint)
+        paint.shader = null
+
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 1.5f * density
+        paint.color = 0xFF64D8FF.toInt()
+        canvas.drawRoundRect(bounds, 17f * density, 17f * density, paint)
+
+        // Subtle orbital ring and corner glints.
+        paint.strokeWidth = 1.2f * density
+        paint.color = 0x8869D9FF.toInt()
+        canvas.drawCircle(w * .5f, h * .48f, 18f * density, paint)
+        paint.style = Paint.Style.FILL
+        paint.color = 0xFFBDEFFF.toInt()
+        canvas.drawCircle(w * .79f, h * .22f, 2.1f * density, paint)
+
+        paint.color = 0xFFFFFFFF.toInt()
+        paint.textAlign = Paint.Align.CENTER
+        paint.typeface = android.graphics.Typeface.create("sans-serif-black", android.graphics.Typeface.BOLD)
+        paint.textSize = 17f * density
+        paint.setShadowLayer(4f * density, 0f, 1f * density, 0xAA55CFFF.toInt())
+        val baseline = h * .57f - (paint.ascent() + paint.descent()) / 2f
+        canvas.drawText("TNT", w * .5f, baseline, paint)
+        paint.clearShadowLayer()
+
+        paint.color = 0xFF73DFFF.toInt()
+        val dotY = h * .79f
+        canvas.drawCircle(w * .38f, dotY, 1.5f * density, paint)
+        canvas.drawCircle(w * .5f, dotY, 1.5f * density, paint)
+        canvas.drawCircle(w * .62f, dotY, 1.5f * density, paint)
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        val parentView = parent as? View ?: return false
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                downRawX = event.rawX
+                downRawY = event.rawY
+                startTranslationX = translationX
+                startTranslationY = translationY
+                dragged = false
+                parent?.requestDisallowInterceptTouchEvent(true)
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val dx = event.rawX - downRawX
+                val dy = event.rawY - downRawY
+                if (!dragged && (kotlin.math.abs(dx) > touchSlop || kotlin.math.abs(dy) > touchSlop)) {
+                    dragged = true
+                }
+                if (dragged) {
+                    val minX = -left.toFloat()
+                    val maxX = (parentView.width - right).toFloat()
+                    val minY = -top.toFloat()
+                    val maxY = (parentView.height - bottom).toFloat()
+                    translationX = (startTranslationX + dx).coerceIn(minX, maxX)
+                    translationY = (startTranslationY + dy).coerceIn(minY, maxY)
+                }
+                return true
+            }
+            MotionEvent.ACTION_UP -> {
+                parent?.requestDisallowInterceptTouchEvent(false)
+                if (!dragged) performClick() else {
+                    // Snap gently inside the visible content bounds.
+                    val minX = -left.toFloat()
+                    val maxX = (parentView.width - right).toFloat()
+                    val minY = -top.toFloat()
+                    val maxY = (parentView.height - bottom).toFloat()
+                    translationX = translationX.coerceIn(minX, maxX)
+                    translationY = translationY.coerceIn(minY, maxY)
+                }
+                return true
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                parent?.requestDisallowInterceptTouchEvent(false)
+                dragged = false
+                return true
+            }
+        }
+        return true
+    }
+
+    override fun performClick(): Boolean {
+        super.performClick()
+        onClick()
+        return true
+    }
+}
 
 private class InspectorOverlay private constructor(
     private val activity: Activity,
