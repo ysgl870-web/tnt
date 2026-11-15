@@ -1,6 +1,7 @@
 package moe.ono.hooks.item.developer
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.app.Application
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -25,7 +26,6 @@ import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import moe.ono.hooks._base.BaseClickableFunctionHookItem
@@ -42,6 +42,7 @@ import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.WeakHashMap
 import kotlin.math.max
 import kotlin.math.min
 
@@ -94,7 +95,7 @@ class QQInspectorLinkHistory : BaseClickableFunctionHookItem() {
             }
         }
 
-        MaterialAlertDialogBuilder(context)
+        AlertDialog.Builder(context)
             .setTitle("QQ 链接记录（${rows.size}/100）")
             .setMessage(text)
             .setPositiveButton("复制全部") { _, _ ->
@@ -131,15 +132,22 @@ private object QQInspectorRuntime {
             try {
                 app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
                     override fun onActivityCreated(activity: Activity, state: Bundle?) {
-                        if (isEnabled()) QQInspectorLinks.captureActivity(activity)
+                        if (isEnabled()) {
+                            runCatching { QQInspectorLinks.captureActivity(activity) }
+                                .onFailure { Logger.w("TNT Activity URL scan failed: " + it.javaClass.simpleName) }
+                        }
                     }
                     override fun onActivityStarted(activity: Activity) = Unit
                     override fun onActivityResumed(activity: Activity) {
-                        if (isEnabled()) {
-                            QQInspectorLinks.captureActivity(activity)
-                            attach(activity)
-                        } else {
-                            detach(activity)
+                        runCatching {
+                            if (isEnabled()) {
+                                QQInspectorLinks.captureActivity(activity)
+                                attach(activity)
+                            } else {
+                                detach(activity)
+                            }
+                        }.onFailure {
+                            Logger.e("TNT inspector Activity resume failed", it)
                         }
                     }
                     override fun onActivityPaused(activity: Activity) = Unit
@@ -159,6 +167,7 @@ private object QQInspectorRuntime {
     }.getOrDefault(false)
 
     fun detach(activity: Activity) {
+        runCatching { InspectorControlState.restoreAll() }
         val content = activity.findViewById<ViewGroup>(android.R.id.content) ?: return
         for (index in content.childCount - 1 downTo 0) {
             val child = content.getChildAt(index)
@@ -174,21 +183,19 @@ private object QQInspectorRuntime {
         val content = activity.findViewById<ViewGroup>(android.R.id.content) ?: return
         if (content.findViewWithTag<View>(BUTTON_TAG) != null) return
 
-        val button = InspectorEntryView(activity).apply {
+        val button = InspectorEntryView(activity) {
+            InspectorOverlay.open(activity)
+        }.apply {
             tag = BUTTON_TAG
-            text = "控件"
-            textSize = 13f
-            setTextColor(0xFFFFFFFF.toInt())
-            setBackgroundColor(0xE52683C6.toInt())
-            gravity = Gravity.CENTER
-            elevation = dp(activity, 8).toFloat()
+            contentDescription = "TNT 控件探测器，按住可拖动，点击打开"
+            elevation = dp(activity, 12).toFloat()
             isClickable = true
             isFocusable = true
-            setPadding(dp(activity, 10), dp(activity, 6), dp(activity, 10), dp(activity, 6))
-            setOnClickListener { InspectorOverlay.open(activity) }
         }
-        val lp = FrameLayout.LayoutParams(dp(activity, 48), dp(activity, 40), Gravity.END or Gravity.CENTER_VERTICAL)
-        lp.marginEnd = dp(activity, 6)
+        val size = dp(activity, 54)
+        val lp = FrameLayout.LayoutParams(size, size, Gravity.END or Gravity.CENTER_VERTICAL).apply {
+            marginEnd = dp(activity, 10)
+        }
         content.addView(button, lp)
     }
 }
@@ -295,16 +302,21 @@ private object InspectorTree {
             }
         }
 
-        val methods = listOf("getUrl", "getOriginalUrl", "getCurrentUrl", "getWebUrl")
-        methods.forEach { methodName ->
-            val raw = runCatching {
-                view.javaClass.methods.firstOrNull {
-                    it.name == methodName && it.parameterTypes.isEmpty()
-                }?.invoke(view)?.toString()
-            }.getOrNull()
-            if (!raw.isNullOrBlank()) {
-                QQInspectorLinks.add("WEBVIEW_CURRENT", raw, view.javaClass.name + "." + methodName)
-                QQInspectorLinks.sanitize(raw)?.let(found::add)
+        val className = view.javaClass.name
+        val webViewLike = view is WebView ||
+            className.contains("webview", ignoreCase = true) ||
+            className.contains("x5", ignoreCase = true)
+        if (webViewLike) {
+            listOf("getUrl", "getOriginalUrl", "getCurrentUrl", "getWebUrl").forEach { methodName ->
+                val raw = runCatching {
+                    view.javaClass.methods.firstOrNull {
+                        it.name == methodName && it.parameterTypes.isEmpty()
+                    }?.invoke(view)?.toString()
+                }.getOrNull()
+                if (!raw.isNullOrBlank()) {
+                    QQInspectorLinks.add("WEBVIEW_CURRENT", raw, className + "." + methodName)
+                    QQInspectorLinks.sanitize(raw)?.let(found::add)
+                }
             }
         }
         return found.toList()
@@ -312,7 +324,188 @@ private object InspectorTree {
 
 }
 
-private class InspectorEntryView(context: Context) : TextView(context)
+/**
+ * Reversible UI controls. Changes are temporary and are restored when the inspector closes,
+ * is disabled, or the host Activity detaches.
+ */
+private object InspectorControlState {
+    private data class SavedState(
+        val visibility: Int,
+        val enabled: Boolean,
+        val clickable: Boolean,
+        val longClickable: Boolean
+    )
+
+    private val saved = WeakHashMap<View, SavedState>()
+
+    private fun remember(view: View) {
+        if (!saved.containsKey(view)) {
+            saved[view] = SavedState(
+                visibility = view.visibility,
+                enabled = view.isEnabled,
+                clickable = view.isClickable,
+                longClickable = view.isLongClickable
+            )
+        }
+    }
+
+    @Synchronized
+    fun hide(view: View): Boolean = runCatching {
+        if (view.parent == null) return false
+        remember(view)
+        view.visibility = View.GONE
+        true
+    }.getOrDefault(false)
+
+    @Synchronized
+    fun disable(view: View): Boolean = runCatching {
+        if (view.parent == null) return false
+        remember(view)
+        view.isEnabled = false
+        view.isClickable = false
+        view.isLongClickable = false
+        true
+    }.getOrDefault(false)
+
+    @Synchronized
+    fun restoreAll(): Int {
+        val entries = saved.entries.map { it.key to it.value }
+        saved.clear()
+        entries.forEach { (view, state) ->
+            runCatching {
+                view.visibility = state.visibility
+                view.isEnabled = state.enabled
+                view.isClickable = state.clickable
+                view.isLongClickable = state.longClickable
+            }
+        }
+        return entries.size
+    }
+}
+
+/**
+ * Draggable TNT launcher. A short tap opens the inspector; a drag only moves the
+ * floating launcher and never activates the underlying QQ view.
+ */
+private class InspectorEntryView(
+    context: Context,
+    private val onClick: () -> Unit
+) : View(context) {
+    private val density = resources.displayMetrics.density
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val touchSlop = android.view.ViewConfiguration.get(context).scaledTouchSlop
+    private var downRawX = 0f
+    private var downRawY = 0f
+    private var startTranslationX = 0f
+    private var startTranslationY = 0f
+    private var dragged = false
+
+    init {
+        setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val w = width.toFloat()
+        val h = height.toFloat()
+        val inset = 2.5f * density
+        val bounds = RectF(inset, inset, w - inset, h - inset)
+
+        // ONO-inspired midnight-blue glass badge with cyan edge lighting.
+        paint.style = Paint.Style.FILL
+        paint.shader = android.graphics.LinearGradient(
+            0f, 0f, w, h,
+            intArrayOf(0xFF142D55.toInt(), 0xFF075A9D.toInt(), 0xFF102447.toInt()),
+            null, android.graphics.Shader.TileMode.CLAMP
+        )
+        canvas.drawRoundRect(bounds, 17f * density, 17f * density, paint)
+        paint.shader = null
+
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 1.5f * density
+        paint.color = 0xFF64D8FF.toInt()
+        canvas.drawRoundRect(bounds, 17f * density, 17f * density, paint)
+
+        // Subtle orbital ring and corner glints.
+        paint.strokeWidth = 1.2f * density
+        paint.color = 0x8869D9FF.toInt()
+        canvas.drawCircle(w * .5f, h * .48f, 18f * density, paint)
+        paint.style = Paint.Style.FILL
+        paint.color = 0xFFBDEFFF.toInt()
+        canvas.drawCircle(w * .79f, h * .22f, 2.1f * density, paint)
+
+        paint.color = 0xFFFFFFFF.toInt()
+        paint.textAlign = Paint.Align.CENTER
+        paint.typeface = android.graphics.Typeface.create("sans-serif-black", android.graphics.Typeface.BOLD)
+        paint.textSize = 17f * density
+        paint.setShadowLayer(4f * density, 0f, 1f * density, 0xAA55CFFF.toInt())
+        val baseline = h * .57f - (paint.ascent() + paint.descent()) / 2f
+        canvas.drawText("TNT", w * .5f, baseline, paint)
+        paint.clearShadowLayer()
+
+        paint.color = 0xFF73DFFF.toInt()
+        val dotY = h * .79f
+        canvas.drawCircle(w * .38f, dotY, 1.5f * density, paint)
+        canvas.drawCircle(w * .5f, dotY, 1.5f * density, paint)
+        canvas.drawCircle(w * .62f, dotY, 1.5f * density, paint)
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        val parentView = parent as? View ?: return false
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                downRawX = event.rawX
+                downRawY = event.rawY
+                startTranslationX = translationX
+                startTranslationY = translationY
+                dragged = false
+                parent?.requestDisallowInterceptTouchEvent(true)
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val dx = event.rawX - downRawX
+                val dy = event.rawY - downRawY
+                if (!dragged && (kotlin.math.abs(dx) > touchSlop || kotlin.math.abs(dy) > touchSlop)) {
+                    dragged = true
+                }
+                if (dragged) {
+                    val minX = -left.toFloat()
+                    val maxX = (parentView.width - right).toFloat()
+                    val minY = -top.toFloat()
+                    val maxY = (parentView.height - bottom).toFloat()
+                    translationX = (startTranslationX + dx).coerceIn(minX, maxX)
+                    translationY = (startTranslationY + dy).coerceIn(minY, maxY)
+                }
+                return true
+            }
+            MotionEvent.ACTION_UP -> {
+                parent?.requestDisallowInterceptTouchEvent(false)
+                if (!dragged) performClick() else {
+                    // Snap gently inside the visible content bounds.
+                    val minX = -left.toFloat()
+                    val maxX = (parentView.width - right).toFloat()
+                    val minY = -top.toFloat()
+                    val maxY = (parentView.height - bottom).toFloat()
+                    translationX = translationX.coerceIn(minX, maxX)
+                    translationY = translationY.coerceIn(minY, maxY)
+                }
+                return true
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                parent?.requestDisallowInterceptTouchEvent(false)
+                dragged = false
+                return true
+            }
+        }
+        return true
+    }
+
+    override fun performClick(): Boolean {
+        super.performClick()
+        onClick()
+        return true
+    }
+}
 
 private class InspectorOverlay private constructor(
     private val activity: Activity,
@@ -333,6 +526,7 @@ private class InspectorOverlay private constructor(
         addView(toolbar, ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
     }
     private var bordersVisible = true
+    private var pickMode = false
 
     init {
         // Transparent overlay: never tint the entire QQ page.
@@ -351,15 +545,29 @@ private class InspectorOverlay private constructor(
         toolbarParams.topMargin = (statusBarHeight - rootLocation[1]).coerceAtLeast(0)
         addView(toolbarScroll, toolbarParams)
         boxes.setNodes(nodes)
-        boxes.setOnNodeSelected { showNode(it) }
+        boxes.setPickMode(false)
+        boxes.setOnNodeSelected { selected ->
+            if (activity.isFinishing || activity.isDestroyed) return@setOnNodeSelected
+            activity.runOnUiThread {
+                runSafely {
+                    if (selected.view.isAttachedToWindow || selected.view.parent != null) {
+                        showNode(selected)
+                    } else {
+                        Toast.makeText(activity, "该控件已离开当前页面，请刷新控件列表", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }
         buildToolbar()
     }
 
     private fun buildToolbar() {
         toolbar.removeAllViews()
-        toolbar.addView(toolButton("控件 ${nodes.size}") { showList() }, buttonParams())
+        toolbar.addView(toolButton("控件列表 ${nodes.size}") { showList() }, buttonParams())
+        toolbar.addView(toolButton(if (pickMode) "点选:开" else "点选:关") { togglePickMode() }, buttonParams())
         toolbar.addView(toolButton("刷新") { refresh() }, buttonParams())
         toolbar.addView(toolButton(if (bordersVisible) "边框:开" else "边框:关") { toggleBorders() }, buttonParams())
+        toolbar.addView(toolButton("恢复控件") { restoreControls() }, buttonParams())
         toolbar.addView(toolButton("保存链接") { saveCurrentLinks() }, buttonParams())
         toolbar.addView(toolButton("链接记录") { showLinkHistory() }, buttonParams())
         toolbar.addView(toolButton("复制结构") { copyTree() }, buttonParams())
@@ -371,6 +579,19 @@ private class InspectorOverlay private constructor(
         marginEnd = dp(activity, 4)
     }
 
+    private fun runSafely(action: () -> Unit) {
+        try {
+            if (activity.isFinishing || activity.isDestroyed) return
+            action()
+        } catch (error: Throwable) {
+            Logger.e("TNT inspector action failed: " + error.message, error)
+            val detail = error.message?.take(100)
+            val message = if (detail.isNullOrBlank()) error.javaClass.simpleName
+                else "${error.javaClass.simpleName}: $detail"
+            Toast.makeText(activity, "控件操作失败：$message", Toast.LENGTH_LONG).show()
+        }
+    }
+
     private fun toolButton(label: String, action: () -> Unit) = TextView(activity).apply {
         text = label
         textSize = 12f
@@ -378,21 +599,59 @@ private class InspectorOverlay private constructor(
         setTextColor(0xFFFFFFFF.toInt())
         setBackgroundColor(0xFF087DBB.toInt())
         isClickable = true
-        setOnClickListener { action() }
+        isFocusable = true
+        setOnClickListener { runSafely(action) }
+    }
+
+    private fun togglePickMode() {
+        pickMode = !pickMode
+        boxes.setPickMode(pickMode)
+        buildToolbar()
+        Toast.makeText(
+            activity,
+            if (pickMode) "点选模式已开启：点蓝色控件查看详情" else "点选模式已关闭：QQ 页面点击恢复正常",
+            Toast.LENGTH_SHORT
+        ).show()
     }
 
     private fun toggleBorders() {
         bordersVisible = !bordersVisible
         boxes.visibility = if (bordersVisible) View.VISIBLE else View.GONE
+        if (!bordersVisible && pickMode) {
+            pickMode = false
+            boxes.setPickMode(false)
+        }
         buildToolbar()
     }
 
+    private fun restoreControls() {
+        val count = InspectorControlState.restoreAll()
+        refresh()
+        Toast.makeText(activity, "已恢复本次修改的控件（$count）", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun canModify(node: InspectorNode): Boolean {
+        val content = activity.findViewById<ViewGroup>(android.R.id.content) ?: return false
+        if (node.view === content || node.view.parent == null) return false
+        if (node.view is InspectorOverlay || node.view.tag == QQInspectorRuntimeEntryTag) return false
+        val totalArea = content.width.toLong() * content.height.toLong()
+        if (totalArea > 0 && node.area.toDouble() > totalArea.toDouble() * 0.35) return false
+        return true
+    }
+
     private fun refresh() {
-        QQInspectorLinks.captureActivity(activity)
-        nodes = InspectorTree.collect(activity)
-        boxes.setNodes(nodes)
-        buildToolbar()
-        Toast.makeText(activity, "已重新扫描 ${nodes.size} 个控件", Toast.LENGTH_SHORT).show()
+        runCatching {
+            QQInspectorLinks.captureActivity(activity)
+            InspectorTree.collect(activity)
+        }.onSuccess { refreshed ->
+            nodes = refreshed
+            boxes.setNodes(nodes)
+            buildToolbar()
+            Toast.makeText(activity, "已重新扫描 ${nodes.size} 个控件", Toast.LENGTH_SHORT).show()
+        }.onFailure {
+            Logger.e("TNT inspector refresh failed", it)
+            Toast.makeText(activity, "扫描失败：${it.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun saveCurrentLinks() {
@@ -411,7 +670,7 @@ private class InspectorOverlay private constructor(
     private fun showLinkHistory() {
         val rows = QQInspectorLinks.readAll()
         if (rows.isEmpty()) {
-            MaterialAlertDialogBuilder(activity)
+            AlertDialog.Builder(activity)
                 .setTitle("QQ 链接记录")
                 .setMessage("暂时没有记录。打开 QQ 页面后点击「保存链接」，或浏览内置网页触发自动记录。")
                 .setPositiveButton("知道了", null)
@@ -422,12 +681,12 @@ private class InspectorOverlay private constructor(
             val date = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(row.optLong("time")))
             "$date · ${row.optString("kind")} · ${row.optString("source")}\n${row.optString("url")}"
         }.toTypedArray()
-        MaterialAlertDialogBuilder(activity)
+        AlertDialog.Builder(activity)
             .setTitle("链接历史（${rows.size}/100）")
             .setItems(labels) { _, which ->
                 val row = rows.asReversed().getOrNull(which) ?: return@setItems
                 val url = row.optString("url")
-                MaterialAlertDialogBuilder(activity)
+                AlertDialog.Builder(activity)
                     .setTitle("链接详情")
                     .setMessage(url)
                     .setPositiveButton("复制") { _, _ -> copyText(activity, "QQ链接", url) }
@@ -447,15 +706,16 @@ private class InspectorOverlay private constructor(
     }
 
     private fun showList() {
-        val labels = nodes.mapIndexed { index, node ->
+        val shownNodes = nodes.take(160)
+        val labels = shownNodes.mapIndexed { index, node ->
             "${index + 1}. ${node.className.substringAfterLast('.')}\n" +
                 "${node.resourceId} · ${node.width}×${node.height} · ${node.area}px²" +
                 if (node.directLinks.isNotEmpty()) "\n🔗 控件链接：${node.directLinks.first()}"
                 else if (node.links.isNotEmpty()) "\n🌐 页面链接：${node.links.first()}" else ""
         }.toTypedArray()
-        MaterialAlertDialogBuilder(activity)
-            .setTitle("${nodes.size} 个控件可选（面积从小到大）")
-            .setItems(labels) { _, which -> nodes.getOrNull(which)?.let(::showNode) }
+        AlertDialog.Builder(activity)
+            .setTitle("控件列表（共 ${nodes.size} 个，显示前 ${shownNodes.size} 个）")
+            .setItems(labels) { _, which -> shownNodes.getOrNull(which)?.let { runSafely { showNode(it) } } }
             .setNegativeButton("关闭", null)
             .show()
     }
@@ -493,26 +753,46 @@ private class InspectorOverlay private constructor(
         }
 
         val actions = mutableListOf("复制控件信息")
+        if (canModify(node)) {
+            actions.add("临时隐藏此控件")
+            if (node.view.isEnabled) actions.add("临时禁用此控件")
+        }
         if (links.isNotEmpty()) actions.add("复制第一个链接")
         val canReadText = node.view is TextView &&
             node.view !is EditText &&
             node.view.transformationMethod !is PasswordTransformationMethod
         if (canReadText) actions.add("读取此控件文本（可能包含聊天内容）")
 
-        MaterialAlertDialogBuilder(activity)
+        AlertDialog.Builder(activity)
             .setTitle("控件详情")
             .setMessage(message)
             .setItems(actions.toTypedArray()) { _, which ->
                 when (actions[which]) {
                     "复制控件信息" -> copyText(activity, "QQ控件", nodeJson(node).toString(2))
+                    "临时隐藏此控件" -> {
+                        if (canModify(node) && InspectorControlState.hide(node.view)) {
+                            Toast.makeText(activity, "控件已临时隐藏，点“恢复控件”可还原", Toast.LENGTH_SHORT).show()
+                            refresh()
+                        } else {
+                            Toast.makeText(activity, "此控件当前不可隐藏", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    "临时禁用此控件" -> {
+                        if (canModify(node) && InspectorControlState.disable(node.view)) {
+                            Toast.makeText(activity, "控件已临时禁用，点“恢复控件”可还原", Toast.LENGTH_SHORT).show()
+                            refresh()
+                        } else {
+                            Toast.makeText(activity, "此控件当前不可禁用", Toast.LENGTH_SHORT).show()
+                        }
+                    }
                     "复制第一个链接" -> links.firstOrNull()?.let { copyText(activity, "QQ链接", it) }
                     "读取此控件文本（可能包含聊天内容）" -> {
-                        MaterialAlertDialogBuilder(activity)
+                        AlertDialog.Builder(activity)
                             .setTitle("读取此控件文本？")
                             .setMessage("文本可能包含私聊内容、群消息、昵称或其他个人信息。仅在你确认当前页面内容可以读取时继续。")
                             .setPositiveButton("确认读取") { _, _ ->
                                 val text = (node.view as? TextView)?.text?.toString().orEmpty().take(600)
-                                MaterialAlertDialogBuilder(activity)
+                                AlertDialog.Builder(activity)
                                     .setTitle("控件文本（最多600字符）")
                                     .setMessage(if (text.isBlank()) "（空）" else text)
                                     .setPositiveButton("复制") { _, _ -> copyText(activity, "QQ控件文本", text) }
@@ -553,29 +833,36 @@ private class InspectorOverlay private constructor(
     }
 
     private fun disableFeature() {
-        runCatching {
+        runSafely {
             ConfigManager.getDefaultConfig().edit()
                 .putBoolean(Constants.PrekXXX + "开发者选项/QQ界面控件探测器", false)
                 .apply()
+            QQInspectorRuntime.detach(activity)
+            Toast.makeText(activity, "控件探测器已停用，可在 TNT 设置中重新开启", Toast.LENGTH_LONG).show()
         }
-        QQInspectorRuntime.detach(activity)
-        Toast.makeText(activity, "控件探测器已停用，可在 TNT 设置中重新开启", Toast.LENGTH_LONG).show()
     }
 
     private fun close() {
+        InspectorControlState.restoreAll()
         (parent as? ViewGroup)?.removeView(this)
         QQInspectorRuntime.attach(activity)
     }
 
     companion object {
         fun open(activity: Activity) {
-            val root = activity.findViewById<ViewGroup>(android.R.id.content) ?: return
-            val alreadyOpen = (0 until root.childCount).any { root.getChildAt(it) is InspectorOverlay }
-            if (alreadyOpen) return
-            val entry = root.findViewWithTag<View>(QQInspectorRuntimeEntryTag)
-            if (entry != null) root.removeView(entry)
-            val overlay = InspectorOverlay(activity, root, InspectorTree.collect(activity))
-            root.addView(overlay, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            if (activity.isFinishing || activity.isDestroyed) return
+            runCatching {
+                val root = activity.findViewById<ViewGroup>(android.R.id.content) ?: return
+                val alreadyOpen = (0 until root.childCount).any { root.getChildAt(it) is InspectorOverlay }
+                if (alreadyOpen) return
+                val entry = root.findViewWithTag<View>(QQInspectorRuntimeEntryTag)
+                if (entry != null) root.removeView(entry)
+                val overlay = InspectorOverlay(activity, root, InspectorTree.collect(activity))
+                root.addView(overlay, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            }.onFailure {
+                Logger.e("TNT inspector open failed", it)
+                Toast.makeText(activity, "控件探测器打开失败：${it.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+            }
         }
     }
 
@@ -597,7 +884,14 @@ private class InspectorOverlay private constructor(
         private var drawnNodes: List<InspectorNode> = emptyList()
         private var pressedNode: InspectorNode? = null
         private var onSelected: ((InspectorNode) -> Unit)? = null
-        private val density = context.resources.displayMetrics.density
+        private var pickMode = false
+
+        fun setPickMode(enabled: Boolean) {
+            pickMode = enabled
+            isClickable = enabled
+            isFocusable = enabled
+            pressedNode = null
+        }
 
         fun setNodes(value: List<InspectorNode>) {
             nodes = value
@@ -644,6 +938,10 @@ private class InspectorOverlay private constructor(
                 .minWithOrNull(compareBy<InspectorNode> { it.area }.thenByDescending { it.depth })
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
+            if (!pickMode) {
+                pressedNode = null
+                return false
+            }
             val location = IntArray(2)
             getLocationOnScreen(location)
             val x = (location[0] + event.x).toInt()
@@ -663,7 +961,9 @@ private class InspectorOverlay private constructor(
                     pressedNode = null
                     if (down != null) {
                         val up = hitNode(x, y)
-                        if (up != null) onSelected?.invoke(up)
+                        if (up != null && up.view === down.view) {
+                            onSelected?.invoke(down)
+                        }
                         return true
                     }
                     return false
@@ -731,17 +1031,23 @@ private object QQInspectorLinks {
         val root = runCatching { activity.findViewById<ViewGroup>(android.R.id.content) }.getOrNull()
         var inspected = 0
         fun walk(view: View) {
-            if (inspected++ > 700) return
+            if (inspected++ > 360) return
             if (view is InspectorOverlay || view.tag == "tnt.qq.inspector.entry") return
             if (view.visibility != View.VISIBLE || view.alpha <= 0.03f) return
-            listOf("getUrl", "getOriginalUrl", "getCurrentUrl", "getWebUrl").forEach { name ->
-                val raw = runCatching {
-                    view.javaClass.methods.firstOrNull { it.name == name && it.parameterTypes.isEmpty() }
-                        ?.invoke(view)?.toString()
-                }.getOrNull()
-                if (!raw.isNullOrBlank()) {
-                    add("ACTIVITY_WEBVIEW", raw, activity.javaClass.simpleName + "/" + view.javaClass.simpleName)
-                    sanitize(raw)?.let(found::add)
+            val className = view.javaClass.name
+            val webViewLike = view is WebView ||
+                className.contains("webview", ignoreCase = true) ||
+                className.contains("x5", ignoreCase = true)
+            if (webViewLike) {
+                listOf("getUrl", "getOriginalUrl", "getCurrentUrl", "getWebUrl").forEach { name ->
+                    val raw = runCatching {
+                        view.javaClass.methods.firstOrNull { it.name == name && it.parameterTypes.isEmpty() }
+                            ?.invoke(view)?.toString()
+                    }.getOrNull()
+                    if (!raw.isNullOrBlank()) {
+                        add("ACTIVITY_WEBVIEW", raw, activity.javaClass.simpleName + "/" + className)
+                        sanitize(raw)?.let(found::add)
+                    }
                 }
             }
             if (view is ViewGroup) {
