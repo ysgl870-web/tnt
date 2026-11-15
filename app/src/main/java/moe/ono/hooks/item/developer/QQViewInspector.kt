@@ -896,14 +896,38 @@ private class InspectorOverlay private constructor(
     }
 
     private fun showNode(node: InspectorNode) {
-        val controlLinks = node.directLinks.distinct()
-        val pageLinks = node.links.filterNot { it in controlLinks }.distinct()
-        val links = (controlLinks + pageLinks).distinct().ifEmpty {
-            QQInspectorLinks.readAll().takeLast(8).map { it.optString("url") }
-        }
+        // Merge image and control views that occupy substantially the same visible rectangle.
+        // QQ often wraps an image in a clickable message/card container; selecting either layer
+        // should expose both records instead of making the user guess which nested view to tap.
+        val peers = nodes.filter { candidate ->
+            val left = max(node.bounds.left, candidate.bounds.left)
+            val top = max(node.bounds.top, candidate.bounds.top)
+            val right = min(node.bounds.right, candidate.bounds.right)
+            val bottom = min(node.bounds.bottom, candidate.bounds.bottom)
+            val intersection = (right - left).coerceAtLeast(0).toLong() *
+                (bottom - top).coerceAtLeast(0).toLong()
+            val smaller = min(node.area, candidate.area).coerceAtLeast(1L)
+            candidate === node || intersection.toDouble() / smaller.toDouble() >= 0.78
+        }.distinctBy { it.view }
+        val controlLinks = peers.flatMap { it.directLinks }.distinct()
+        val imageLinks = peers.flatMap { it.imageLinks }.distinct()
+        val pageLinks = peers.flatMap { peer ->
+            peer.links.filterNot { it in peer.directLinks || it in peer.imageLinks }
+        }.distinct()
+        val links = (controlLinks + pageLinks).distinct()
         val message = buildString {
-            append("控件类名：").append(node.className)
+            append(if (peers.any { it.view is ImageView || it.imageLinks.isNotEmpty() }) "图片 + 控件合并详情" else "控件详情")
+            append("\n选中视图：").append(node.className)
             append("\n资源 ID：").append(node.resourceId)
+            if (peers.size > 1) {
+                append("\n\n同一框范围内合并了 ").append(peers.size).append(" 个视图：")
+                peers.forEachIndexed { index, peer ->
+                    append("\n").append(index + 1).append(". ")
+                        .append(peer.className.substringAfterLast('.'))
+                        .append(" · ").append(peer.width).append("×").append(peer.height)
+                        .append(if (peer.view is ImageView || peer.imageLinks.isNotEmpty()) " · 图片" else " · 控件")
+                }
+            }
             append("\n屏幕坐标：").append(node.bounds.left).append(",")
                 .append(node.bounds.top).append(" - ")
                 .append(node.bounds.right).append(",").append(node.bounds.bottom)
@@ -921,8 +945,10 @@ private class InspectorOverlay private constructor(
             append(if (controlLinks.isEmpty()) "无" else "\n" + controlLinks.take(8).joinToString("\n"))
             append("\n\n当前 Activity / WebView 页面链接：")
             append(if (pageLinks.isEmpty()) "无" else "\n" + pageLinks.take(8).joinToString("\n"))
-            if (controlLinks.isEmpty() && pageLinks.isEmpty() && links.isNotEmpty()) {
-                append("\n最近保存的链接：\n").append(links.take(8).joinToString("\n"))
+            if (imageLinks.isNotEmpty()) {
+                append("\n\n图片直链：\n").append(imageLinks.take(12).joinToString("\n"))
+            } else if (peers.any { it.view is ImageView }) {
+                append("\n\n图片：已识别图片控件，但 QQ 未向当前视图暴露可用直链。")
             }
             append("\n\n控件文本默认隐藏；仅在你明确确认后读取。")
         }
@@ -941,7 +967,7 @@ private class InspectorOverlay private constructor(
             actions.add("复制链接 ${index + 1}")
             actions.add("跳转链接 ${index + 1}（需确认）")
         }
-        node.imageLinks.forEachIndexed { index, _ ->
+        imageLinks.forEachIndexed { index, _ ->
             actions.add("复制图片直链 ${index + 1}")
             actions.add("打开图片 ${index + 1}（需确认）")
         }
@@ -950,10 +976,41 @@ private class InspectorOverlay private constructor(
             node.view.transformationMethod !is PasswordTransformationMethod
         if (canReadText) actions.add("读取此控件文本（可能包含聊天内容）")
 
-        AlertDialog.Builder(activity)
-            .setTitle("控件详情")
-            .setMessage(message)
-            .setItems(actions.toTypedArray()) { _, which ->
+        val content = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(activity, 18), dp(activity, 12), dp(activity, 18), dp(activity, 8))
+        }
+        val detailText = TextView(activity).apply {
+            text = message
+            textSize = 13f
+            setTextColor(0xFF202A36.toInt())
+            setPadding(dp(activity, 4), dp(activity, 4), dp(activity, 4), dp(activity, 12))
+            setTextIsSelectable(true)
+        }
+        val detailScroll = android.widget.ScrollView(activity).apply {
+            isFillViewport = false
+            addView(detailText, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        content.addView(detailScroll, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(activity, 300)
+        ))
+        val dialog = AlertDialog.Builder(activity)
+            .setTitle(if (peers.any { it.view is ImageView || it.imageLinks.isNotEmpty() }) "图片与控件详情" else "控件详情")
+            .setView(content)
+            .setNegativeButton("关闭", null)
+            .create()
+        actions.forEach { actionLabel ->
+            val actionButton = TextView(activity).apply {
+                text = actionLabel
+                textSize = 13f
+                setTextColor(0xFF1268A5.toInt())
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(activity, 12), dp(activity, 11), dp(activity, 12), dp(activity, 11))
+                isClickable = true
+                setOnClickListener {
+                    val which = actions.indexOf(actionLabel)
+                    dialog.dismiss()
+                    runSafely {
                 when (actions[which]) {
                     "复制控件信息" -> copyText(activity, "QQ控件", nodeJson(node).toString(2))
                     "隐藏此控件" -> {
@@ -1011,14 +1068,21 @@ private class InspectorOverlay private constructor(
                         when {
                             copyLink != null -> links.getOrNull(copyLink - 1)?.let { copyText(activity, "QQ链接", it) }
                             openLink != null -> links.getOrNull(openLink - 1)?.let { confirmOpenLink(it, "页面链接") }
-                            copyImage != null -> node.imageLinks.getOrNull(copyImage - 1)?.let { copyText(activity, "QQ图片直链", it) }
-                            openImage != null -> node.imageLinks.getOrNull(openImage - 1)?.let { confirmOpenLink(it, "图片直链") }
+                            copyImage != null -> imageLinks.getOrNull(copyImage - 1)?.let { copyText(activity, "QQ图片直链", it) }
+                            openImage != null -> imageLinks.getOrNull(openImage - 1)?.let { confirmOpenLink(it, "图片直链") }
                         }
                     }
                 }
+                    }
+                }
             }
-            .setNegativeButton("关闭", null)
-            .show()
+            content.addView(actionButton, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+            val divider = View(activity).apply { setBackgroundColor(0xFFE4EAF0.toInt()) }
+            content.addView(divider, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(activity, 1)))
+        }
+        dialog.show()
     }
 
     private fun confirmOpenLink(url: String, label: String) {
