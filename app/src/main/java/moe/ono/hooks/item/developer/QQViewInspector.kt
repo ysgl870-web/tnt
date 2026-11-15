@@ -690,6 +690,8 @@ private class InspectorOverlay private constructor(
     }
     private var bordersVisible = true
     private var pickMode = false
+    private var multiSelect = false
+    private val selectedViews = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<View, Boolean>())
 
     init {
         // Transparent overlay: never tint the entire QQ page.
@@ -709,6 +711,11 @@ private class InspectorOverlay private constructor(
         addView(toolbarScroll, toolbarParams)
         boxes.setNodes(nodes)
         boxes.setPickMode(false)
+        boxes.setOnSelectionChanged { views ->
+            selectedViews.clear()
+            selectedViews.addAll(views)
+            buildToolbar()
+        }
         boxes.setOnNodeSelected { selected ->
             if (activity.isFinishing || activity.isDestroyed) return@setOnNodeSelected
             activity.runOnUiThread {
@@ -728,6 +735,8 @@ private class InspectorOverlay private constructor(
         toolbar.removeAllViews()
         toolbar.addView(toolButton("控件列表 ${nodes.size}") { showList() }, buttonParams())
         toolbar.addView(toolButton(if (pickMode) "点选:开" else "点选:关") { togglePickMode() }, buttonParams())
+        toolbar.addView(toolButton(if (multiSelect) "多选:开 ${selectedViews.size}" else "多选:关") { toggleMultiSelect() }, buttonParams())
+        if (selectedViews.isNotEmpty()) toolbar.addView(toolButton("批量操作(${selectedViews.size})") { showBatchActions() }, buttonParams())
         toolbar.addView(toolButton("刷新") { refresh() }, buttonParams())
         toolbar.addView(toolButton(if (bordersVisible) "边框:开" else "边框:关") { toggleBorders() }, buttonParams())
         toolbar.addView(toolButton("恢复控件") { restoreControls() }, buttonParams())
@@ -771,6 +780,30 @@ private class InspectorOverlay private constructor(
         isClickable = true
         isFocusable = true
         setOnClickListener { runSafely(action) }
+    }
+
+    private fun toggleMultiSelect() {
+        multiSelect = !multiSelect
+        boxes.setMultiSelect(multiSelect)
+        if (multiSelect) { pickMode = true; boxes.setPickMode(true) }
+        buildToolbar()
+        Toast.makeText(activity, if (multiSelect) "多选已开启，橙色边框为已选控件" else "多选已关闭", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun showBatchActions() {
+        val targets = nodes.filter { it.view in selectedViews && canModify(it) }.distinctBy { it.view }
+        if (targets.isEmpty()) return
+        AlertDialog.Builder(activity).setTitle("批量操作 · ${targets.size} 个控件")
+            .setItems(arrayOf("批量隐藏", "批量移除（可恢复）", "批量禁用", "取消选择")) { _, which ->
+                when (which) {
+                    0, 1 -> targets.forEach { InspectorControlState.hide(it.view) }
+                    2 -> targets.forEach { InspectorControlState.disable(it.view) }
+                    3 -> { selectedViews.clear(); boxes.setSelectedViews(emptyList()); buildToolbar(); return@setItems }
+                }
+                val count = targets.size
+                selectedViews.clear(); boxes.setSelectedViews(emptyList()); refresh()
+                Toast.makeText(activity, "已处理 ${count} 个控件，可使用恢复控件还原", Toast.LENGTH_SHORT).show()
+            }.show()
     }
 
     private fun togglePickMode() {
@@ -965,6 +998,7 @@ private class InspectorOverlay private constructor(
         }
 
         val actions = mutableListOf("复制控件信息")
+        if (peers.size > 1) actions.add("选择同一图层全部控件")
         if (canModify(node)) {
             actions.add("隐藏此控件")
             actions.add("强制移除此控件（可恢复）")
@@ -1012,6 +1046,17 @@ private class InspectorOverlay private constructor(
         content.addView(detailScroll, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, dp(activity, 260)
         ))
+        if (peers.size > 1) {
+            content.addView(TextView(activity).apply { text = "同一图层控件（点击单项查看详情）"; textSize = 13f; setTextColor(0xFF48627D.toInt()); setPadding(0, dp(activity, 10), 0, dp(activity, 4)) })
+            peers.forEachIndexed { index, peer ->
+                content.addView(TextView(activity).apply {
+                    text = "${index + 1}. ${peer.className.substringAfterLast('.')} · ${peer.width}×${peer.height}  ›"
+                    textSize = 13f; setTextColor(0xFF075A9D.toInt()); setPadding(dp(activity, 12), dp(activity, 10), dp(activity, 12), dp(activity, 10))
+                    background = GradientDrawable().apply { cornerRadius = dp(activity, 8).toFloat(); setColor(0xFFEAF3FC.toInt()) }
+                    setOnClickListener { dialog.dismiss(); showNode(peer) }
+                }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            }
+        }
         val wholeScroll = android.widget.ScrollView(activity).apply {
             isFillViewport = false
             addView(content, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
@@ -1040,6 +1085,12 @@ private class InspectorOverlay private constructor(
                     runSafely {
                 when (actions[which]) {
                     "复制控件信息" -> copyText(activity, "QQ控件", nodeJson(node).toString(2))
+                    "选择同一图层全部控件" -> {
+                        multiSelect = true; pickMode = true; boxes.setPickMode(true); boxes.setMultiSelect(true)
+                        boxes.setSelectedViews(peers.map { it.view })
+                        Toast.makeText(activity, "已选中同一图层 ${peers.size} 个控件", Toast.LENGTH_SHORT).show()
+                        buildToolbar()
+                    }
                     "隐藏此控件" -> {
                         if (canModify(node) && InspectorControlState.hide(node.view)) {
                             if (node.view.id != View.NO_ID) InspectorControlState.addPersistentRule(activity, node.view, "hide")
@@ -1207,6 +1258,12 @@ private class InspectorOverlay private constructor(
         private var pressedNode: InspectorNode? = null
         private var onSelected: ((InspectorNode) -> Unit)? = null
         private var pickMode = false
+        private var multiSelect = false
+        private val selectedViews = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<View, Boolean>())
+        private var onSelectionChanged: ((Set<View>) -> Unit)? = null
+        fun setMultiSelect(enabled: Boolean) { multiSelect = enabled; if (!enabled) selectedViews.clear(); invalidate(); onSelectionChanged?.invoke(selectedViews.toSet()) }
+        fun setOnSelectionChanged(listener: (Set<View>) -> Unit) { onSelectionChanged = listener }
+        fun setSelectedViews(views: Collection<View>) { selectedViews.clear(); selectedViews.addAll(views); invalidate(); onSelectionChanged?.invoke(selectedViews.toSet()) }
 
         fun setPickMode(enabled: Boolean) {
             pickMode = enabled
@@ -1242,12 +1299,14 @@ private class InspectorOverlay private constructor(
                     (node.bounds.right - screenLeft).toFloat(),
                     (node.bounds.bottom - screenTop).toFloat()
                 )
-                // Images use a cyan outline; interactive controls use blue. No translucent fill.
-                borderPaint.color = if (node.view is ImageView || node.imageLinks.isNotEmpty()) {
-                    0xFF22C9D8.toInt()
-                } else {
-                    0xFF168DDE.toInt()
-                }
+                val selected = node.view in selectedViews
+                borderPaint.color = when { selected -> 0xFFFFB020.toInt(); node.view is ImageView || node.imageLinks.isNotEmpty() -> 0xFF22C9D8.toInt(); else -> 0xFF168DDE.toInt() }
+                if (selected) {
+                    borderPaint.style = Paint.Style.FILL; borderPaint.alpha = 55
+                    canvas.drawRect(rect, borderPaint)
+                    borderPaint.style = Paint.Style.STROKE; borderPaint.alpha = 255
+                    borderPaint.strokeWidth = dp(context, 2).toFloat()
+                } else { borderPaint.style = Paint.Style.STROKE; borderPaint.strokeWidth = dp(context, 1).toFloat() }
                 canvas.drawRect(rect, borderPaint)
                 if (rect.width() >= dp(context, 28) && rect.height() >= dp(context, 18)) {
                     val label = (index + 1).toString()
@@ -1289,7 +1348,10 @@ private class InspectorOverlay private constructor(
                     if (down != null) {
                         val up = hitNode(x, y)
                         if (up != null && up.view === down.view) {
-                            onSelected?.invoke(down)
+                            if (multiSelect) {
+                                if (!selectedViews.add(down.view)) selectedViews.remove(down.view)
+                                invalidate(); onSelectionChanged?.invoke(selectedViews.toSet())
+                            } else onSelected?.invoke(down)
                         }
                         return true
                     }
