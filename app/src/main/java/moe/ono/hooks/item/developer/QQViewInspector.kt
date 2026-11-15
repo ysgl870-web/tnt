@@ -508,7 +508,7 @@ private class InspectorOverlay private constructor(
                 canvas.drawRect(rectF, fillPaint)
                 canvas.drawRect(rectF, borderPaint)
                 if (rect.width() >= dp(context, 18) && rect.height() >= dp(context, 16)) {
-                    canvas.drawText((index + 1).toString(), rect.left + dp(context, 2), rect.top + dp(context, 12).toFloat(), numberPaint)
+                    canvas.drawText((index + 1).toString(), (rect.left + dp(context, 2)).toFloat(), (rect.top + dp(context, 12)).toFloat(), numberPaint)
                 }
             }
         }
