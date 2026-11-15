@@ -21,6 +21,7 @@ import android.view.ViewGroup
 import android.webkit.WebView
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -41,6 +42,7 @@ import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.WeakHashMap
 import kotlin.math.max
 import kotlin.math.min
 
@@ -129,9 +131,18 @@ private object QQInspectorRuntime {
             val app = runCatching { HostInfo.getApplication() }.getOrNull() ?: return
             try {
                 app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
-                    override fun onActivityCreated(activity: Activity, state: Bundle?) = Unit
+                    override fun onActivityCreated(activity: Activity, state: Bundle?) {
+                        if (isEnabled()) QQInspectorLinks.captureActivity(activity)
+                    }
                     override fun onActivityStarted(activity: Activity) = Unit
-                    override fun onActivityResumed(activity: Activity) = if (isEnabled()) attach(activity) else detach(activity)
+                    override fun onActivityResumed(activity: Activity) {
+                        if (isEnabled()) {
+                            QQInspectorLinks.captureActivity(activity)
+                            attach(activity)
+                        } else {
+                            detach(activity)
+                        }
+                    }
                     override fun onActivityPaused(activity: Activity) = Unit
                     override fun onActivityStopped(activity: Activity) = Unit
                     override fun onActivitySaveInstanceState(activity: Activity, state: Bundle) = Unit
@@ -149,6 +160,7 @@ private object QQInspectorRuntime {
     }.getOrDefault(false)
 
     fun detach(activity: Activity) {
+        runCatching { InspectorControlState.restoreAll() }
         val content = activity.findViewById<ViewGroup>(android.R.id.content) ?: return
         for (index in content.childCount - 1 downTo 0) {
             val child = content.getChildAt(index)
@@ -157,8 +169,7 @@ private object QQInspectorRuntime {
     }
 
     fun attach(activity: Activity) {
-        if (!isEnabled()) return
-        if (activity.isFinishing || activity.isDestroyed) return
+        if (!isEnabled() || activity.isFinishing || activity.isDestroyed) return
         val pkg = runCatching { activity.packageName }.getOrDefault("")
         if (pkg != "com.tencent.mobileqq" && pkg != "com.tencent.tim") return
         if (activity.javaClass.name.startsWith("moe.ono.")) return
@@ -184,6 +195,7 @@ private object QQInspectorRuntime {
     }
 }
 
+
 private data class InspectorNode(
     val view: View,
     val className: String,
@@ -199,6 +211,7 @@ private data class InspectorNode(
     val enabled: Boolean,
     val alpha: Float,
     val childCount: Int,
+    val directLinks: List<String>,
     val links: List<String>
 )
 
@@ -209,6 +222,7 @@ private object InspectorTree {
     fun collect(activity: Activity): List<InspectorNode> {
         val root = activity.findViewById<ViewGroup>(android.R.id.content) ?: return emptyList()
         val result = ArrayList<InspectorNode>()
+        val pageLinks = QQInspectorLinks.captureActivity(activity)
         val rootOnScreen = IntArray(2)
         root.getLocationOnScreen(rootOnScreen)
 
@@ -235,6 +249,7 @@ private object InspectorTree {
                     "NO_ID"
                 }
                 val childCount = (view as? ViewGroup)?.childCount ?: 0
+                val directLinks = collectLinks(view)
                 result.add(
                     InspectorNode(
                         view = view,
@@ -251,7 +266,8 @@ private object InspectorTree {
                         enabled = view.isEnabled,
                         alpha = view.alpha,
                         childCount = childCount,
-                        links = collectLinks(view)
+                        directLinks = directLinks,
+                        links = (directLinks + pageLinks).distinct()
                     )
                 )
             }
@@ -280,17 +296,85 @@ private object InspectorTree {
                 }
             }
         }
-        val webUrl = runCatching {
-            val method = view.javaClass.methods.firstOrNull {
-                it.name == "getUrl" && it.parameterTypes.isEmpty() && it.returnType == String::class.java
-            } ?: return@runCatching null
-            method.invoke(view) as? String
-        }.getOrNull()
-        if (!webUrl.isNullOrBlank()) {
-            QQInspectorLinks.add("WEBVIEW", webUrl, view.javaClass.simpleName)
-            QQInspectorLinks.sanitize(webUrl)?.let(found::add)
+
+        val className = view.javaClass.name
+        val webViewLike = view is WebView ||
+            className.contains("webview", ignoreCase = true) ||
+            className.contains("x5", ignoreCase = true)
+        if (webViewLike) {
+            listOf("getUrl", "getOriginalUrl", "getCurrentUrl", "getWebUrl").forEach { methodName ->
+                val raw = runCatching {
+                    view.javaClass.methods.firstOrNull {
+                        it.name == methodName && it.parameterTypes.isEmpty()
+                    }?.invoke(view)?.toString()
+                }.getOrNull()
+                if (!raw.isNullOrBlank()) {
+                    QQInspectorLinks.add("WEBVIEW_CURRENT", raw, className + "." + methodName)
+                    QQInspectorLinks.sanitize(raw)?.let(found::add)
+                }
+            }
         }
         return found.toList()
+    }
+
+}
+
+/**
+ * Reversible UI controls. Changes are temporary and are restored when the inspector closes,
+ * is disabled, or the host Activity detaches.
+ */
+private object InspectorControlState {
+    private data class SavedState(
+        val visibility: Int,
+        val enabled: Boolean,
+        val clickable: Boolean,
+        val longClickable: Boolean
+    )
+
+    private val saved = WeakHashMap<View, SavedState>()
+
+    private fun remember(view: View) {
+        if (!saved.containsKey(view)) {
+            saved[view] = SavedState(
+                visibility = view.visibility,
+                enabled = view.isEnabled,
+                clickable = view.isClickable,
+                longClickable = view.isLongClickable
+            )
+        }
+    }
+
+    @Synchronized
+    fun hide(view: View): Boolean = runCatching {
+        if (view.parent == null) return false
+        remember(view)
+        view.visibility = View.GONE
+        true
+    }.getOrDefault(false)
+
+    @Synchronized
+    fun disable(view: View): Boolean = runCatching {
+        if (view.parent == null) return false
+        remember(view)
+        view.isEnabled = false
+        view.isClickable = false
+        view.isLongClickable = false
+        true
+    }.getOrDefault(false)
+
+    @Synchronized
+    fun restoreAll(): Int {
+        val entries = saved.entries.map { it.key to it.value }
+        saved.clear()
+        entries.forEach { (view, state) ->
+            runCatching {
+                view.visibility = state.visibility
+                view.isEnabled = state.enabled
+                view.isClickable = state.clickable
+                view.isLongClickable = state.longClickable
+            }
+        }
+        return entries.size
     }
 }
 
@@ -309,30 +393,62 @@ private class InspectorOverlay private constructor(
         setBackgroundColor(0xE62C3038.toInt())
         elevation = dp(activity, 10).toFloat()
     }
+    private val toolbarScroll = HorizontalScrollView(activity).apply {
+        isHorizontalScrollBarEnabled = false
+        overScrollMode = View.OVER_SCROLL_NEVER
+        addView(toolbar, ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+    }
+    private var bordersVisible = true
+    private var pickMode = false
 
     init {
-        setBackgroundColor(0x18000000)
-        isClickable = true
+        // Transparent overlay: never tint the entire QQ page.
+        setBackgroundColor(0x00000000)
+        isClickable = false
+        isFocusable = false
         addView(boxes, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
-        addView(
-            toolbar,
-            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT, Gravity.TOP)
-        )
-        buildToolbar()
+        val toolbarParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT, Gravity.TOP)
+        val rootLocation = IntArray(2)
+        root.getLocationOnScreen(rootLocation)
+        val statusBarId = activity.resources.getIdentifier("status_bar_height", "dimen", "android")
+        val statusBarHeight = if (statusBarId > 0) {
+            runCatching { activity.resources.getDimensionPixelSize(statusBarId) }.getOrDefault(0)
+        } else 0
+        // Some QQ pages are edge-to-edge; offset the toolbar only when content begins behind the status bar.
+        toolbarParams.topMargin = (statusBarHeight - rootLocation[1]).coerceAtLeast(0)
+        addView(toolbarScroll, toolbarParams)
         boxes.setNodes(nodes)
-        boxes.setOnNodeSelected { showNode(it) }
+        boxes.setPickMode(false)
+        boxes.setOnNodeSelected { runSafely { showNode(it) } }
+        buildToolbar()
     }
 
     private fun buildToolbar() {
         toolbar.removeAllViews()
-        toolbar.addView(toolButton("控件 ${nodes.size}") { showList() }, weightedParams())
-        toolbar.addView(toolButton("刷新") { refresh() }, weightedParams())
-        toolbar.addView(toolButton("复制结构") { copyTree() }, weightedParams())
-        toolbar.addView(toolButton("关闭") { close() }, weightedParams())
+        toolbar.addView(toolButton("控件列表 ${nodes.size}") { showList() }, buttonParams())
+        toolbar.addView(toolButton(if (pickMode) "点选:开" else "点选:关") { togglePickMode() }, buttonParams())
+        toolbar.addView(toolButton("刷新") { refresh() }, buttonParams())
+        toolbar.addView(toolButton(if (bordersVisible) "边框:开" else "边框:关") { toggleBorders() }, buttonParams())
+        toolbar.addView(toolButton("恢复控件") { restoreControls() }, buttonParams())
+        toolbar.addView(toolButton("保存链接") { saveCurrentLinks() }, buttonParams())
+        toolbar.addView(toolButton("链接记录") { showLinkHistory() }, buttonParams())
+        toolbar.addView(toolButton("复制结构") { copyTree() }, buttonParams())
+        toolbar.addView(toolButton("停用探测") { disableFeature() }, buttonParams())
+        toolbar.addView(toolButton("关闭") { close() }, buttonParams())
     }
 
-    private fun weightedParams() = LinearLayout.LayoutParams(0, dp(activity, 42), 1f).apply {
+    private fun buttonParams() = LinearLayout.LayoutParams(dp(activity, 82), dp(activity, 42)).apply {
         marginEnd = dp(activity, 4)
+    }
+
+    private fun runSafely(action: () -> Unit) {
+        try {
+            if (activity.isFinishing || activity.isDestroyed) return
+            action()
+        } catch (error: Throwable) {
+            Logger.e("TNT inspector action failed", error)
+            Toast.makeText(activity, "控件操作失败：${error.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun toolButton(label: String, action: () -> Unit) = TextView(activity).apply {
@@ -340,32 +456,128 @@ private class InspectorOverlay private constructor(
         textSize = 12f
         gravity = Gravity.CENTER
         setTextColor(0xFFFFFFFF.toInt())
-        setBackgroundColor(0xFF2479B8.toInt())
+        setBackgroundColor(0xFF087DBB.toInt())
         isClickable = true
-        setOnClickListener { action() }
+        isFocusable = true
+        setOnClickListener { runSafely(action) }
+    }
+
+    private fun togglePickMode() {
+        pickMode = !pickMode
+        boxes.setPickMode(pickMode)
+        buildToolbar()
+        Toast.makeText(
+            activity,
+            if (pickMode) "点选模式已开启：点蓝色控件查看详情" else "点选模式已关闭：QQ 页面点击恢复正常",
+            Toast.LENGTH_SHORT
+        ).show()
+    }
+
+    private fun toggleBorders() {
+        bordersVisible = !bordersVisible
+        boxes.visibility = if (bordersVisible) View.VISIBLE else View.GONE
+        if (!bordersVisible && pickMode) {
+            pickMode = false
+            boxes.setPickMode(false)
+        }
+        buildToolbar()
+    }
+
+    private fun restoreControls() {
+        val count = InspectorControlState.restoreAll()
+        refresh()
+        Toast.makeText(activity, "已恢复本次修改的控件（$count）", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun canModify(node: InspectorNode): Boolean {
+        val content = activity.findViewById<ViewGroup>(android.R.id.content) ?: return false
+        if (node.view === content || node.view.parent == null) return false
+        if (node.view is InspectorOverlay || node.view.tag == QQInspectorRuntimeEntryTag) return false
+        val totalArea = content.width.toLong() * content.height.toLong()
+        if (totalArea > 0 && node.area.toDouble() > totalArea.toDouble() * 0.35) return false
+        return true
     }
 
     private fun refresh() {
+        QQInspectorLinks.captureActivity(activity)
         nodes = InspectorTree.collect(activity)
         boxes.setNodes(nodes)
         buildToolbar()
         Toast.makeText(activity, "已重新扫描 ${nodes.size} 个控件", Toast.LENGTH_SHORT).show()
     }
 
-    private fun showList() {
-        val labels = nodes.take(180).mapIndexed { index, node ->
-            "${index + 1}. ${node.className.substringAfterLast('.')}\n" +
-                "${node.resourceId} · ${node.width}×${node.height} · ${node.area}px²"
+    private fun saveCurrentLinks() {
+        val activityLinks = QQInspectorLinks.captureActivity(activity)
+        val visibleNodes = InspectorTree.collect(activity)
+        val discovered = (activityLinks + visibleNodes.flatMap { it.directLinks }).distinct()
+        if (discovered.isEmpty()) {
+            Toast.makeText(activity, "当前 Activity 暂未发现 Intent 或 WebView 链接", Toast.LENGTH_LONG).show()
+            return
+        }
+        discovered.forEach { QQInspectorLinks.add("MANUAL_SAVE", it, "手动保存当前页面") }
+        val total = QQInspectorLinks.readAll().size
+        Toast.makeText(activity, "已保存 ${discovered.size} 个页面链接，历史共 ${total} 条", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun showLinkHistory() {
+        val rows = QQInspectorLinks.readAll()
+        if (rows.isEmpty()) {
+            MaterialAlertDialogBuilder(activity)
+                .setTitle("QQ 链接记录")
+                .setMessage("暂时没有记录。打开 QQ 页面后点击「保存链接」，或浏览内置网页触发自动记录。")
+                .setPositiveButton("知道了", null)
+                .show()
+            return
+        }
+        val labels = rows.asReversed().mapIndexed { index, row ->
+            val date = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(row.optLong("time")))
+            "$date · ${row.optString("kind")} · ${row.optString("source")}\n${row.optString("url")}"
         }.toTypedArray()
         MaterialAlertDialogBuilder(activity)
-            .setTitle("${nodes.size} 个控件可选（面积从小到大）")
-            .setItems(labels) { _, which -> nodes.getOrNull(which)?.let(::showNode) }
+            .setTitle("链接历史（${rows.size}/100）")
+            .setItems(labels) { _, which ->
+                val row = rows.asReversed().getOrNull(which) ?: return@setItems
+                val url = row.optString("url")
+                MaterialAlertDialogBuilder(activity)
+                    .setTitle("链接详情")
+                    .setMessage(url)
+                    .setPositiveButton("复制") { _, _ -> copyText(activity, "QQ链接", url) }
+                    .setNeutralButton("清空记录") { _, _ ->
+                        QQInspectorLinks.clear()
+                        Toast.makeText(activity, "链接记录已清空", Toast.LENGTH_SHORT).show()
+                    }
+                    .setNegativeButton("关闭", null)
+                    .show()
+            }
+            .setNeutralButton("清空全部") { _, _ ->
+                QQInspectorLinks.clear()
+                Toast.makeText(activity, "链接记录已清空", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("关闭", null)
+            .show()
+    }
+
+    private fun showList() {
+        val shownNodes = nodes.take(160)
+        val labels = shownNodes.mapIndexed { index, node ->
+            "${index + 1}. ${node.className.substringAfterLast('.')}\n" +
+                "${node.resourceId} · ${node.width}×${node.height} · ${node.area}px²" +
+                if (node.directLinks.isNotEmpty()) "\n🔗 控件链接：${node.directLinks.first()}"
+                else if (node.links.isNotEmpty()) "\n🌐 页面链接：${node.links.first()}" else ""
+        }.toTypedArray()
+        MaterialAlertDialogBuilder(activity)
+            .setTitle("控件列表（共 ${nodes.size} 个，显示前 ${shownNodes.size} 个）")
+            .setItems(labels) { _, which -> shownNodes.getOrNull(which)?.let { runSafely { showNode(it) } } }
             .setNegativeButton("关闭", null)
             .show()
     }
 
     private fun showNode(node: InspectorNode) {
-        val linkText = if (node.links.isEmpty()) "无" else node.links.joinToString("\n")
+        val controlLinks = node.directLinks.distinct()
+        val pageLinks = node.links.filterNot { it in controlLinks }.distinct()
+        val links = (controlLinks + pageLinks).ifEmpty {
+            QQInspectorLinks.readAll().takeLast(8).map { it.optString("url") }
+        }
         val message = buildString {
             append("控件类名：").append(node.className)
             append("\n资源 ID：").append(node.resourceId)
@@ -381,17 +593,27 @@ private class InspectorOverlay private constructor(
             append("\n可聚焦：").append(node.focusable)
             append(" · 启用：").append(node.enabled)
             append("\n子控件数：").append(node.childCount)
-            append("\nviewInfo：").append(node.view.toString().take(1200))
-            append("\n链接：\n").append(linkText)
-            append("\n\n控件文本默认隐藏，防止误显示聊天内容。")
+            append("\nviewInfo：").append(node.view.toString().take(900))
+            append("\n\n控件自身链接：")
+            append(if (controlLinks.isEmpty()) "无" else "\n" + controlLinks.take(8).joinToString("\n"))
+            append("\n\n当前 Activity / WebView 页面链接：")
+            append(if (pageLinks.isEmpty()) "无" else "\n" + pageLinks.take(8).joinToString("\n"))
+            if (controlLinks.isEmpty() && pageLinks.isEmpty() && links.isNotEmpty()) {
+                append("\n最近保存的链接：\n").append(links.take(8).joinToString("\n"))
+            }
+            append("\n\n控件文本默认隐藏；仅在你明确确认后读取。")
         }
 
         val actions = mutableListOf("复制控件信息")
+        if (canModify(node)) {
+            actions.add("临时隐藏此控件")
+            if (node.view.isEnabled) actions.add("临时禁用此控件")
+        }
+        if (links.isNotEmpty()) actions.add("复制第一个链接")
         val canReadText = node.view is TextView &&
             node.view !is EditText &&
             node.view.transformationMethod !is PasswordTransformationMethod
         if (canReadText) actions.add("读取此控件文本（可能包含聊天内容）")
-        if (node.links.isNotEmpty()) actions.add("复制第一个链接")
 
         MaterialAlertDialogBuilder(activity)
             .setTitle("控件详情")
@@ -399,6 +621,23 @@ private class InspectorOverlay private constructor(
             .setItems(actions.toTypedArray()) { _, which ->
                 when (actions[which]) {
                     "复制控件信息" -> copyText(activity, "QQ控件", nodeJson(node).toString(2))
+                    "临时隐藏此控件" -> {
+                        if (canModify(node) && InspectorControlState.hide(node.view)) {
+                            Toast.makeText(activity, "控件已临时隐藏，点“恢复控件”可还原", Toast.LENGTH_SHORT).show()
+                            refresh()
+                        } else {
+                            Toast.makeText(activity, "此控件当前不可隐藏", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    "临时禁用此控件" -> {
+                        if (canModify(node) && InspectorControlState.disable(node.view)) {
+                            Toast.makeText(activity, "控件已临时禁用，点“恢复控件”可还原", Toast.LENGTH_SHORT).show()
+                            refresh()
+                        } else {
+                            Toast.makeText(activity, "此控件当前不可禁用", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    "复制第一个链接" -> links.firstOrNull()?.let { copyText(activity, "QQ链接", it) }
                     "读取此控件文本（可能包含聊天内容）" -> {
                         MaterialAlertDialogBuilder(activity)
                             .setTitle("读取此控件文本？")
@@ -414,9 +653,6 @@ private class InspectorOverlay private constructor(
                             }
                             .setNegativeButton("不读取", null)
                             .show()
-                    }
-                    "复制第一个链接" -> node.links.firstOrNull()?.let {
-                        copyText(activity, "QQ链接", it)
                     }
                 }
             }
@@ -438,8 +674,9 @@ private class InspectorOverlay private constructor(
         .put("enabled", node.enabled)
         .put("alpha", node.alpha.toDouble())
         .put("childCount", node.childCount)
-        .put("viewInfo", node.view.toString().take(1200))
-        .put("links", JSONArray(node.links))
+        .put("viewInfo", node.view.toString().take(900))
+        .put("directLinks", JSONArray(node.directLinks))
+        .put("pageAndControlLinks", JSONArray(node.links))
 
     private fun copyTree() {
         val array = JSONArray()
@@ -447,20 +684,37 @@ private class InspectorOverlay private constructor(
         copyText(activity, "QQ控件树", JSONObject().put("count", nodes.size).put("nodes", array).toString(2))
     }
 
+    private fun disableFeature() {
+        runCatching {
+            ConfigManager.getDefaultConfig().edit()
+                .putBoolean(Constants.PrekXXX + "开发者选项/QQ界面控件探测器", false)
+                .apply()
+        }
+        QQInspectorRuntime.detach(activity)
+        Toast.makeText(activity, "控件探测器已停用，可在 TNT 设置中重新开启", Toast.LENGTH_LONG).show()
+    }
+
     private fun close() {
+        InspectorControlState.restoreAll()
         (parent as? ViewGroup)?.removeView(this)
         QQInspectorRuntime.attach(activity)
     }
 
     companion object {
         fun open(activity: Activity) {
-            val root = activity.findViewById<ViewGroup>(android.R.id.content) ?: return
-            val alreadyOpen = (0 until root.childCount).any { root.getChildAt(it) is InspectorOverlay }
-            if (alreadyOpen) return
-            val entry = root.findViewWithTag<View>(QQInspectorRuntimeEntryTag)
-            if (entry != null) root.removeView(entry)
-            val overlay = InspectorOverlay(activity, root, InspectorTree.collect(activity))
-            root.addView(overlay, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            if (activity.isFinishing || activity.isDestroyed) return
+            runCatching {
+                val root = activity.findViewById<ViewGroup>(android.R.id.content) ?: return
+                val alreadyOpen = (0 until root.childCount).any { root.getChildAt(it) is InspectorOverlay }
+                if (alreadyOpen) return
+                val entry = root.findViewWithTag<View>(QQInspectorRuntimeEntryTag)
+                if (entry != null) root.removeView(entry)
+                val overlay = InspectorOverlay(activity, root, InspectorTree.collect(activity))
+                root.addView(overlay, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            }.onFailure {
+                Logger.e("TNT inspector open failed", it)
+                Toast.makeText(activity, "控件探测器打开失败：${it.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+            }
         }
     }
 
@@ -468,22 +722,36 @@ private class InspectorOverlay private constructor(
         private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = 0xFF168DDE.toInt()
             style = Paint.Style.STROKE
-            strokeWidth = dp(context, 2).toFloat()
+            strokeWidth = dp(context, 1).toFloat()
         }
-        private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0x24168DDE
+        private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xDD087DBB.toInt()
             style = Paint.Style.FILL
         }
         private val numberPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = 0xFFFFFFFF.toInt()
-            textSize = dp(context, 11).toFloat()
+            textSize = dp(context, 10).toFloat()
         }
         private var nodes: List<InspectorNode> = emptyList()
+        private var drawnNodes: List<InspectorNode> = emptyList()
+        private var pressedNode: InspectorNode? = null
         private var onSelected: ((InspectorNode) -> Unit)? = null
-        private val rootScreen = IntArray(2)
+        private var pickMode = false
+
+        fun setPickMode(enabled: Boolean) {
+            pickMode = enabled
+            isClickable = enabled
+            isFocusable = enabled
+            pressedNode = null
+        }
 
         fun setNodes(value: List<InspectorNode>) {
             nodes = value
+            val minArea = (dp(context, 9) * dp(context, 9)).toLong()
+            drawnNodes = value.filter {
+                it.area >= minArea && (it.clickable || it.longClickable || it.directLinks.isNotEmpty() ||
+                    (it.focusable && it.childCount == 0))
+            }.take(120)
             invalidate()
         }
 
@@ -497,38 +765,65 @@ private class InspectorOverlay private constructor(
             getLocationOnScreen(location)
             val screenLeft = location[0]
             val screenTop = location[1]
-            nodes.take(160).forEachIndexed { index, node ->
-                val rect = Rect(
-                    node.bounds.left - screenLeft,
-                    node.bounds.top - screenTop,
-                    node.bounds.right - screenLeft,
-                    node.bounds.bottom - screenTop
+            drawnNodes.forEachIndexed { index, node ->
+                val rect = RectF(
+                    (node.bounds.left - screenLeft).toFloat(),
+                    (node.bounds.top - screenTop).toFloat(),
+                    (node.bounds.right - screenLeft).toFloat(),
+                    (node.bounds.bottom - screenTop).toFloat()
                 )
-                val rectF = RectF(rect)
-                canvas.drawRect(rectF, fillPaint)
-                canvas.drawRect(rectF, borderPaint)
-                if (rect.width() >= dp(context, 18) && rect.height() >= dp(context, 16)) {
-                    canvas.drawText((index + 1).toString(), (rect.left + dp(context, 2)).toFloat(), (rect.top + dp(context, 12)).toFloat(), numberPaint)
+                // Outline only: no translucent fill, avoiding the accumulated full-blue screen.
+                canvas.drawRect(rect, borderPaint)
+                if (rect.width() >= dp(context, 28) && rect.height() >= dp(context, 18)) {
+                    val label = (index + 1).toString()
+                    val textWidth = numberPaint.measureText(label)
+                    val labelRect = RectF(rect.left, rect.top, rect.left + textWidth + dp(context, 8), rect.top + dp(context, 15))
+                    canvas.drawRoundRect(labelRect, dp(context, 3).toFloat(), dp(context, 3).toFloat(), labelPaint)
+                    canvas.drawText(label, labelRect.left + dp(context, 4), labelRect.bottom - dp(context, 4).toFloat(), numberPaint)
                 }
             }
         }
 
+        private fun hitNode(x: Int, y: Int): InspectorNode? =
+            drawnNodes.asSequence()
+                .filter { it.bounds.contains(x, y) }
+                .minWithOrNull(compareBy<InspectorNode> { it.area }.thenByDescending { it.depth })
+
         override fun onTouchEvent(event: MotionEvent): Boolean {
-            if (event.action == MotionEvent.ACTION_UP) {
-                val location = IntArray(2)
-                getLocationOnScreen(location)
-                val x = (location[0] + event.x).toInt()
-                val y = (location[1] + event.y).toInt()
-                val selected = nodes.asSequence()
-                    .filter { it.bounds.contains(x, y) }
-                    .minWithOrNull(compareBy<InspectorNode> { it.area }.thenByDescending { it.depth })
-                if (selected != null) onSelected?.invoke(selected)
-                return true
+            if (!pickMode) {
+                pressedNode = null
+                return false
             }
-            return true
+            val location = IntArray(2)
+            getLocationOnScreen(location)
+            val x = (location[0] + event.x).toInt()
+            val y = (location[1] + event.y).toInt()
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    pressedNode = hitNode(x, y)
+                    return pressedNode != null
+                }
+                MotionEvent.ACTION_MOVE -> return pressedNode != null
+                MotionEvent.ACTION_CANCEL -> {
+                    pressedNode = null
+                    return false
+                }
+                MotionEvent.ACTION_UP -> {
+                    val down = pressedNode
+                    pressedNode = null
+                    if (down != null) {
+                        val up = hitNode(x, y)
+                        if (up != null) onSelected?.invoke(up)
+                        return true
+                    }
+                    return false
+                }
+            }
+            return pressedNode != null
         }
     }
 }
+
 
 private const val QQInspectorRuntimeEntryTag = "tnt.qq.inspector.entry"
 
@@ -540,28 +835,97 @@ private fun dp(context: Context, value: Int): Int =
  * No request headers, body, response body, chat packet, or login key is accessed.
  */
 private object QQInspectorLinks {
-    private const val STORAGE_KEY = "tnt_qq_inspector_links_v1"
+    private const val STORAGE_KEY = "tnt_qq_inspector_links_v2"
     private const val MAX_ROWS = 100
     private val lock = Any()
-    private val recent = LinkedHashSet<String>()
+    private val recent = LinkedHashMap<String, Long>()
+    private const val FEATURE_KEY = "开发者选项/QQ界面控件探测器"
+
+    private fun enabled(): Boolean = runCatching {
+        ConfigManager.getDefaultConfig().getBooleanOrFalse(Constants.PrekXXX + FEATURE_KEY)
+    }.getOrDefault(false)
 
     fun install(classLoader: ClassLoader) {
         hookActivityNavigation()
         hookWebViews(classLoader)
     }
 
+    private fun extractIntent(intent: android.content.Intent?, source: String): List<String> {
+        if (intent == null) return emptyList()
+        val found = LinkedHashSet<String>()
+        intent.dataString?.let { raw ->
+            add("ACTIVITY_INTENT", raw, source)
+            sanitize(raw)?.let(found::add)
+        }
+        val extras = runCatching { intent.extras }.getOrNull()
+        if (extras != null) {
+            runCatching {
+                extras.keySet().take(80).forEach { key ->
+                    if (!Regex("(url|link|scheme|jump|web|target|path|redirect)", RegexOption.IGNORE_CASE).containsMatchIn(key)) return@forEach
+                    val value = extras.get(key) as? String ?: return@forEach
+                    val candidate = value.trim()
+                    if (looksLikeLink(candidate)) {
+                        add("ACTIVITY_EXTRA", candidate, "$source:$key")
+                        sanitize(candidate)?.let(found::add)
+                    }
+                }
+            }
+        }
+        return found.toList()
+    }
+
+    fun captureActivity(activity: Activity): List<String> {
+        if (!enabled()) return emptyList()
+        val found = LinkedHashSet<String>()
+        found.addAll(extractIntent(activity.intent, activity.javaClass.simpleName))
+        val root = runCatching { activity.findViewById<ViewGroup>(android.R.id.content) }.getOrNull()
+        var inspected = 0
+        fun walk(view: View) {
+            if (inspected++ > 360) return
+            if (view is InspectorOverlay || view.tag == "tnt.qq.inspector.entry") return
+            if (view.visibility != View.VISIBLE || view.alpha <= 0.03f) return
+            val className = view.javaClass.name
+            val webViewLike = view is WebView ||
+                className.contains("webview", ignoreCase = true) ||
+                className.contains("x5", ignoreCase = true)
+            if (webViewLike) {
+                listOf("getUrl", "getOriginalUrl", "getCurrentUrl", "getWebUrl").forEach { name ->
+                    val raw = runCatching {
+                        view.javaClass.methods.firstOrNull { it.name == name && it.parameterTypes.isEmpty() }
+                            ?.invoke(view)?.toString()
+                    }.getOrNull()
+                    if (!raw.isNullOrBlank()) {
+                        add("ACTIVITY_WEBVIEW", raw, activity.javaClass.simpleName + "/" + className)
+                        sanitize(raw)?.let(found::add)
+                    }
+                }
+            }
+            if (view is ViewGroup) {
+                for (i in 0 until view.childCount) walk(view.getChildAt(i))
+            }
+        }
+        root?.let(::walk)
+        return found.toList()
+    }
+
+    private fun looksLikeLink(raw: String): Boolean {
+        val scheme = runCatching { Uri.parse(raw).scheme?.lowercase(Locale.ROOT) }.getOrNull()
+        return scheme in setOf("http", "https", "mqq", "mqqapi", "qq", "tencent")
+    }
+
     private fun hookActivityNavigation() {
         val callback = object : XC_MethodHook() {
             override fun beforeHookedMethod(param: MethodHookParam) {
                 val intent = param.args.firstOrNull { it is android.content.Intent } as? android.content.Intent ?: return
-                val raw = intent.dataString ?: return
-                add("SCHEME", raw, "Activity.startActivity")
+                extractIntent(intent, "Activity.startActivity")
             }
         }
         runCatching {
             XposedBridge.hookAllMethods(Activity::class.java, "startActivity", callback)
             XposedBridge.hookAllMethods(Activity::class.java, "startActivityForResult", callback)
-        }.onFailure { Logger.w("TNT link hook Activity unavailable: " + it.javaClass.simpleName) }
+            XposedBridge.hookAllMethods(Activity::class.java, "onNewIntent", callback)
+            XposedBridge.hookAllMethods(Activity::class.java, "setIntent", callback)
+        }.onFailure { Logger.w("TNT Activity link hooks unavailable: " + it.javaClass.simpleName) }
     }
 
     private fun hookWebViews(classLoader: ClassLoader) {
@@ -586,7 +950,7 @@ private object QQInspectorLinks {
 
         for (name in listOf("android.webkit.WebViewClient", "com.tencent.smtt.sdk.WebViewClient")) {
             val clazz = runCatching { classLoader.loadClass(name) }.getOrNull() ?: continue
-            listOf("onPageStarted", "shouldOverrideUrlLoading").forEach { methodName ->
+            listOf("onPageStarted", "onPageFinished", "shouldOverrideUrlLoading").forEach { methodName ->
                 runCatching {
                     XposedBridge.hookAllMethods(clazz, methodName, object : XC_MethodHook() {
                         override fun beforeHookedMethod(param: MethodHookParam) {
@@ -606,17 +970,15 @@ private object QQInspectorLinks {
 
     fun sanitize(raw: String): String? {
         return runCatching {
-            val uri = Uri.parse(raw.trim().take(4096))
+            val trimmed = raw.trim().take(4096)
+            val uri = Uri.parse(trimmed)
             val scheme = uri.scheme?.lowercase(Locale.ROOT) ?: return null
             if (scheme !in setOf("http", "https", "mqq", "mqqapi", "qq", "tencent")) return null
-
             val builder = uri.buildUpon().clearQuery().fragment(null)
             val sensitive = Regex("(token|cookie|auth|ticket|secret|sign|signature|skey|p_skey|pskey|uin|session|password|passwd|access.?key|refresh)", RegexOption.IGNORE_CASE)
             uri.queryParameterNames.take(32).forEach { key ->
-                val values = uri.getQueryParameters(key).take(4)
-                values.forEach { value ->
-                    val safeValue = if (sensitive.containsMatchIn(key)) "[redacted]" else value.take(512)
-                    builder.appendQueryParameter(key, safeValue)
+                uri.getQueryParameters(key).take(4).forEach { value ->
+                    builder.appendQueryParameter(key, if (sensitive.containsMatchIn(key)) "[redacted]" else value.take(512))
                 }
             }
             builder.build().toString().take(2048)
@@ -624,40 +986,43 @@ private object QQInspectorLinks {
     }
 
     fun add(kind: String, raw: String, source: String) {
-        val enabled = runCatching {
-            ConfigManager.getDefaultConfig().getBooleanOrFalse(Constants.PrekXXX + "开发者选项/QQ界面控件探测器")
-        }.getOrDefault(false)
-        if (!enabled) return
+        if (!enabled()) return
         val safe = sanitize(raw) ?: return
+        val fingerprint = "$kind|$safe"
         synchronized(lock) {
-            if (!recent.add(safe)) return
-            if (recent.size > 40) recent.remove(recent.first())
+            val now = System.currentTimeMillis()
+            val previous = recent[fingerprint]
+            if (previous != null && now - previous < 900L) return
+            recent[fingerprint] = now
+            while (recent.size > 240) recent.remove(recent.keys.first())
             runCatching {
-                val old = JSONArray(moe.ono.config.ConfigManager.cGetString(STORAGE_KEY, "[]"))
+                val old = JSONArray(ConfigManager.cGetString(STORAGE_KEY, "[]"))
                 val next = JSONArray()
                 val first = (old.length() - (MAX_ROWS - 1)).coerceAtLeast(0)
                 for (index in first until old.length()) old.optJSONObject(index)?.let { next.put(it) }
                 next.put(
                     JSONObject()
-                        .put("time", System.currentTimeMillis())
-                        .put("kind", kind)
-                        .put("source", source.take(80))
+                        .put("time", now)
+                        .put("kind", kind.take(32))
+                        .put("source", source.take(100))
                         .put("url", safe)
                 )
-                moe.ono.config.ConfigManager.cPutString(STORAGE_KEY, next.toString())
+                ConfigManager.cPutString(STORAGE_KEY, next.toString())
+            }.onFailure {
+                Logger.w("TNT link history write failed: " + it.javaClass.simpleName)
             }
         }
     }
 
     fun readAll(): List<JSONObject> = runCatching {
-        val array = JSONArray(moe.ono.config.ConfigManager.cGetString(STORAGE_KEY, "[]"))
+        val array = JSONArray(ConfigManager.cGetString(STORAGE_KEY, "[]"))
         (0 until array.length()).mapNotNull { array.optJSONObject(it)?.let { row -> JSONObject(row.toString()) } }
     }.getOrDefault(emptyList())
 
     fun clear() {
         synchronized(lock) {
             recent.clear()
-            moe.ono.config.ConfigManager.cPutString(STORAGE_KEY, "[]")
+            ConfigManager.cPutString(STORAGE_KEY, "[]")
         }
     }
 }
