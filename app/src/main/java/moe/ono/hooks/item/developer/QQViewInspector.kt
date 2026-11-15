@@ -145,6 +145,7 @@ private object QQInspectorRuntime {
                         runCatching {
                             if (isEnabled()) {
                                 QQInspectorLinks.captureActivity(activity)
+                                InspectorControlState.applyPersistent(activity)
                                 attach(activity)
                             } else {
                                 detach(activity)
@@ -406,6 +407,7 @@ private object InspectorControlState {
     )
 
     private val saved = WeakHashMap<View, SavedState>()
+    private const val RULES_KEY = "tnt_qq_inspector_control_rules_v1"
 
     private fun remember(view: View) {
         if (!saved.containsKey(view)) {
@@ -419,6 +421,69 @@ private object InspectorControlState {
                 layoutParams = view.layoutParams
             )
         }
+    }
+
+    private fun resourceName(view: View): String = if (view.id != View.NO_ID) {
+        runCatching { view.resources.getResourceName(view.id) }.getOrDefault("0x${view.id.toString(16)}")
+    } else "NO_ID"
+
+    @Synchronized
+    fun addPersistentRule(activity: Activity, view: View, mode: String): Boolean {
+        if (view.id == View.NO_ID || mode !in setOf("hide", "disable")) return false
+        return runCatching {
+            val config = ConfigManager.getDefaultConfig()
+            val array = JSONArray(config.getStringOrDefault(RULES_KEY, "[]"))
+            val activityName = activity.javaClass.name
+            val className = view.javaClass.name
+            val resource = resourceName(view)
+            val next = JSONArray()
+            for (i in 0 until array.length()) {
+                val item = array.optJSONObject(i) ?: continue
+                if (item.optString("activity") == activityName &&
+                    item.optString("class") == className &&
+                    item.optString("resource") == resource) continue
+                next.put(item)
+            }
+            next.put(JSONObject().put("activity", activityName).put("class", className)
+                .put("resource", resource).put("mode", mode))
+            config.edit().putString(RULES_KEY, next.toString()).apply()
+            true
+        }.getOrDefault(false)
+    }
+
+    fun clearPersistentRules(): Int {
+        val config = ConfigManager.getDefaultConfig()
+        val count = runCatching { JSONArray(config.getStringOrDefault(RULES_KEY, "[]")).length() }.getOrDefault(0)
+        config.edit().putString(RULES_KEY, "[]").apply()
+        restoreAll()
+        return count
+    }
+
+    fun applyPersistent(activity: Activity) {
+        runCatching {
+            val array = JSONArray(ConfigManager.getDefaultConfig().getStringOrDefault(RULES_KEY, "[]"))
+            if (array.length() == 0) return
+            val rules = (0 until array.length()).mapNotNull { array.optJSONObject(it) }
+                .filter { it.optString("activity") == activity.javaClass.name }
+            if (rules.isEmpty()) return
+            val root = activity.findViewById<ViewGroup>(android.R.id.content) ?: return
+            fun walk(view: View) {
+                val resource = resourceName(view)
+                val rule = rules.firstOrNull {
+                    it.optString("class") == view.javaClass.name && it.optString("resource") == resource
+                }
+                if (rule != null) {
+                    when (rule.optString("mode")) {
+                        "hide" -> hide(view)
+                        "disable" -> disable(view)
+                    }
+                }
+                if (view is ViewGroup) {
+                    for (i in view.childCount - 1 downTo 0) walk(view.getChildAt(i))
+                }
+            }
+            walk(root)
+        }.onFailure { Logger.w("TNT persistent control rules failed: " + it.javaClass.simpleName) }
     }
 
     @Synchronized
@@ -656,6 +721,7 @@ private class InspectorOverlay private constructor(
         toolbar.addView(toolButton("刷新") { refresh() }, buttonParams())
         toolbar.addView(toolButton(if (bordersVisible) "边框:开" else "边框:关") { toggleBorders() }, buttonParams())
         toolbar.addView(toolButton("恢复控件") { restoreControls() }, buttonParams())
+        toolbar.addView(toolButton("清除持续规则") { clearPersistentRules() }, buttonParams())
         toolbar.addView(toolButton("保存全部链接") { saveCurrentLinks() }, buttonParams())
         toolbar.addView(toolButton("链接记录") { showLinkHistory() }, buttonParams())
         toolbar.addView(toolButton("复制结构") { copyTree() }, buttonParams())
@@ -722,6 +788,12 @@ private class InspectorOverlay private constructor(
         val count = InspectorControlState.restoreAll()
         refresh()
         Toast.makeText(activity, "已恢复本次修改的控件（$count）", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun clearPersistentRules() {
+        val count = InspectorControlState.clearPersistentRules()
+        refresh()
+        Toast.makeText(activity, "已清除 $count 条持续规则并恢复当前控件", Toast.LENGTH_SHORT).show()
     }
 
     private fun canModify(node: InspectorNode): Boolean {
@@ -860,6 +932,10 @@ private class InspectorOverlay private constructor(
             actions.add("隐藏此控件")
             actions.add("强制移除此控件（可恢复）")
             if (node.view.isEnabled) actions.add("禁用此控件")
+            if (node.resourceId != "NO_ID") {
+                actions.add("持续隐藏（重进 QQ 仍生效）")
+                actions.add("持续禁用（重进 QQ 仍生效）")
+            }
         }
         links.forEachIndexed { index, _ ->
             actions.add("复制链接 ${index + 1}")
@@ -896,9 +972,19 @@ private class InspectorOverlay private constructor(
                         if (canModify(node) && InspectorControlState.disable(node.view)) {
                             Toast.makeText(activity, "控件已临时禁用，点“恢复控件”可还原", Toast.LENGTH_SHORT).show()
                             refresh()
-                        } else {
-                            Toast.makeText(activity, "此控件当前不可禁用", Toast.LENGTH_SHORT).show()
-                        }
+                        } else Toast.makeText(activity, "此控件当前不可禁用", Toast.LENGTH_SHORT).show()
+                    }
+                    "持续隐藏（重进 QQ 仍生效）" -> {
+                        val saved = InspectorControlState.addPersistentRule(activity, node.view, "hide")
+                        val applied = saved && InspectorControlState.hide(node.view)
+                        Toast.makeText(activity, if (applied) "持续隐藏规则已保存" else "规则保存或应用失败", Toast.LENGTH_SHORT).show()
+                        refresh()
+                    }
+                    "持续禁用（重进 QQ 仍生效）" -> {
+                        val saved = InspectorControlState.addPersistentRule(activity, node.view, "disable")
+                        val applied = saved && InspectorControlState.disable(node.view)
+                        Toast.makeText(activity, if (applied) "持续禁用规则已保存" else "规则保存或应用失败", Toast.LENGTH_SHORT).show()
+                        refresh()
                     }
                     "读取此控件文本（可能包含聊天内容）" -> {
                         AlertDialog.Builder(activity)
