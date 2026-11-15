@@ -31,7 +31,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="5dp"
-            android:text="解析链接参数、解码嵌套内容，并安全交给已安装应用处理"
+            android:text="网页 URL 可封装为 Android Intent Scheme；支持还原 Intent Scheme、解析 QQ Scheme 和安全跳转"
             android:textColor="@color/secondTextColor"
             android:textSize="12sp" />
 
@@ -40,9 +40,9 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            android:background="@drawable/edit_text_bg"
+            android:background="@android:drawable/edit_text"
             android:gravity="top|start"
-            android:hint="粘贴 Scheme 或 URL（mqqapi://、https://…）"
+            android:hint="粘贴 Scheme 或 URL（mqqapi://、https://、intent://…）"
             android:inputType="textUri|textMultiLine"
             android:minHeight="84dp"
             android:padding="12dp"
@@ -81,10 +81,30 @@
             android:id="@+id/btn_copy"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="复制解析结果 / 链接"
+            android:text="复制转换结果"
             android:textColor="@color/firstTextColor"
             app:backgroundTint="@color/mask_bg"
             app:cornerRadius="12dp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="转换输出"
+            android:textColor="@color/firstTextColor"
+            android:textStyle="bold"
+            android:textSize="13sp" />
+
+        <TextView
+            android:id="@+id/scheme_converted"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@color/mask_bg"
+            android:padding="10dp"
+            android:text="转换后的链接会显示在这里"
+            android:textColor="@color/firstTextColor"
+            android:textIsSelectable="true"
+            android:textSize="12sp" />
 
         <View
             android:layout_width="match_parent"
@@ -95,7 +115,7 @@
 
         <ScrollView
             android:layout_width="match_parent"
-            android:layout_height="180dp"
+            android:layout_height="160dp"
             android:fillViewport="true">
 
             <TextView
@@ -103,7 +123,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:padding="10dp"
-                android:text="解析结果会显示在这里。普通 HTTPS 链接不会被伪造为通用 QQ Scheme；可使用跳板交由系统中已注册的应用打开。"
+                android:text="解析详情会显示在这里。普通网页 URL 可以转换为 Android Intent Scheme，但不能凭空转换为通用 QQ mqqapi Scheme。"
                 android:textColor="@color/firstTextColor"
                 android:textIsSelectable="true"
                 android:textSize="13sp" />
