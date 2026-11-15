@@ -171,7 +171,7 @@ private object QQInspectorRuntime {
     }.getOrDefault(false)
 
     fun detach(activity: Activity) {
-        runCatching { InspectorControlState.restoreAll() }
+        // Keep user-applied changes when the probe is closed or disabled.
         val content = activity.findViewById<ViewGroup>(android.R.id.content) ?: return
         for (index in content.childCount - 1 downTo 0) {
             val child = content.getChildAt(index)
@@ -224,6 +224,15 @@ private data class InspectorNode(
     val imageLinks: List<String>,
     val links: List<String>
 )
+
+private fun normalizeImageUrl(raw: String): String? = runCatching {
+    val uri = Uri.parse(raw.trim().take(4096))
+    val scheme = uri.scheme?.lowercase(Locale.ROOT)
+    val host = uri.host?.lowercase(Locale.ROOT)
+    if (scheme !in setOf("http", "https") || host.isNullOrBlank() || uri.userInfo != null) return null
+    if (host == "localhost" || host.endsWith(".local")) return null
+    uri.buildUpon().fragment(null).build().toString().take(4096)
+}.getOrNull()
 
 private object InspectorTree {
     private const val MAX_NODES = 420
@@ -316,7 +325,7 @@ private object InspectorTree {
             val raw = value as? String ?: return
             val candidate = raw.trim()
             if (candidate.length !in 8..4096) return
-            val safe = QQInspectorLinks.sanitize(candidate) ?: return
+            val safe = normalizeImageUrl(candidate) ?: return
             val uri = runCatching { Uri.parse(safe) }.getOrNull() ?: return
             if (uri.scheme !in setOf("http", "https")) return
             val host = uri.host.orEmpty().lowercase(Locale.ROOT)
@@ -326,7 +335,8 @@ private object InspectorTree {
                 host.contains("qq.com") || host.contains("qcloud") ||
                 Regex("(image|img|pic|photo|thumb|origin|url|src)", RegexOption.IGNORE_CASE).containsMatchIn(source)
             if (imageHint && found.add(safe)) {
-                QQInspectorLinks.add("IMAGE_URL", safe, className + "/" + source)
+                // Keep the original signed query string; stripping it can invalidate CDN image URLs.
+                Unit
             }
         }
 
@@ -392,8 +402,8 @@ private object InspectorTree {
 }
 
 /**
- * Reversible UI controls. Changes are temporary and are restored when the inspector closes,
- * is disabled, or the host Activity detaches.
+ * Reversible UI controls. Changes remain in place when the probe closes or is disabled;
+ * the explicit restore action is the only normal way to undo them.
  */
 private object InspectorControlState {
     private data class SavedState(
@@ -474,7 +484,7 @@ private object InspectorControlState {
                 }
                 if (rule != null) {
                     when (rule.optString("mode")) {
-                        "hide" -> hide(view)
+                        "hide", "remove" -> hide(view)
                         "disable" -> disable(view)
                     }
                 }
@@ -785,9 +795,10 @@ private class InspectorOverlay private constructor(
     }
 
     private fun restoreControls() {
+        val rules = InspectorControlState.clearPersistentRules()
         val count = InspectorControlState.restoreAll()
         refresh()
-        Toast.makeText(activity, "已恢复本次修改的控件（$count）", Toast.LENGTH_SHORT).show()
+        Toast.makeText(activity, "已恢复隐藏/移除/禁用控件（本次 $count 个，持续规则 $rules 条）", Toast.LENGTH_LONG).show()
     }
 
     private fun clearPersistentRules() {
@@ -978,13 +989,20 @@ private class InspectorOverlay private constructor(
 
         val content = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(activity, 18), dp(activity, 12), dp(activity, 18), dp(activity, 8))
+            setPadding(dp(activity, 16), dp(activity, 12), dp(activity, 16), dp(activity, 12))
+            setBackgroundColor(0xFFF4F7FB.toInt())
         }
         val detailText = TextView(activity).apply {
             text = message
-            textSize = 13f
-            setTextColor(0xFF202A36.toInt())
-            setPadding(dp(activity, 4), dp(activity, 4), dp(activity, 4), dp(activity, 12))
+            textSize = 14f
+            setTextColor(0xFF172B43.toInt())
+            setLineSpacing(dp(activity, 3).toFloat(), 1.08f)
+            setPadding(dp(activity, 10), dp(activity, 10), dp(activity, 10), dp(activity, 14))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(activity, 12).toFloat()
+                setColor(0xFFFFFFFF.toInt())
+                setStroke(dp(activity, 1), 0xFFDCE6F0.toInt())
+            }
             setTextIsSelectable(true)
         }
         val detailScroll = android.widget.ScrollView(activity).apply {
@@ -992,20 +1010,29 @@ private class InspectorOverlay private constructor(
             addView(detailText, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
         content.addView(detailScroll, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, dp(activity, 300)
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(activity, 260)
         ))
+        val wholeScroll = android.widget.ScrollView(activity).apply {
+            isFillViewport = false
+            addView(content, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
         val dialog = AlertDialog.Builder(activity)
             .setTitle(if (peers.any { it.view is ImageView || it.imageLinks.isNotEmpty() }) "图片与控件详情" else "控件详情")
-            .setView(content)
+            .setView(wholeScroll)
             .setNegativeButton("关闭", null)
             .create()
         actions.forEach { actionLabel ->
             val actionButton = TextView(activity).apply {
                 text = actionLabel
-                textSize = 13f
-                setTextColor(0xFF1268A5.toInt())
+                textSize = 14f
+                setTextColor(0xFF075A9D.toInt())
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(activity, 12), dp(activity, 11), dp(activity, 12), dp(activity, 11))
+                setPadding(dp(activity, 14), dp(activity, 13), dp(activity, 14), dp(activity, 13))
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(activity, 9).toFloat()
+                    setColor(0xFFE7F2FC.toInt())
+                    setStroke(dp(activity, 1), 0xFFC9DFF2.toInt())
+                }
                 isClickable = true
                 setOnClickListener {
                     val which = actions.indexOf(actionLabel)
@@ -1015,14 +1042,19 @@ private class InspectorOverlay private constructor(
                     "复制控件信息" -> copyText(activity, "QQ控件", nodeJson(node).toString(2))
                     "隐藏此控件" -> {
                         if (canModify(node) && InspectorControlState.hide(node.view)) {
-                            Toast.makeText(activity, "控件已隐藏，可点“恢复控件”还原", Toast.LENGTH_SHORT).show()
+                            if (node.view.id != View.NO_ID) InspectorControlState.addPersistentRule(activity, node.view, "hide")
+                            Toast.makeText(activity, "控件已隐藏；关闭探测器后仍保持隐藏，可在探测界面点“恢复控件”还原", Toast.LENGTH_LONG).show()
                             refresh()
                         } else Toast.makeText(activity, "此控件当前不可隐藏", Toast.LENGTH_SHORT).show()
                     }
                     "强制移除此控件（可恢复）" -> {
-                        if (canModify(node) && InspectorControlState.remove(node.view)) {
-                            Toast.makeText(activity, "控件已从当前页面移除，可恢复", Toast.LENGTH_SHORT).show()
+                        if (canModify(node)) {
+                            val ruleSaved = node.view.id != View.NO_ID &&
+                                InspectorControlState.addPersistentRule(activity, node.view, "remove")
+                            if (InspectorControlState.hide(node.view)) {
+                                Toast.makeText(activity, if (ruleSaved) "控件已移除；关闭探测器后仍保持移除，可在探测界面恢复" else "控件已隐藏；无资源 ID，跨页面持久恢复能力有限", Toast.LENGTH_LONG).show()
                             refresh()
+                            } else Toast.makeText(activity, "此控件当前不可移除", Toast.LENGTH_SHORT).show()
                         } else Toast.makeText(activity, "此控件当前不可移除", Toast.LENGTH_SHORT).show()
                     }
                     "禁用此控件" -> {
@@ -1078,9 +1110,7 @@ private class InspectorOverlay private constructor(
             }
             content.addView(actionButton, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            ))
-            val divider = View(activity).apply { setBackgroundColor(0xFFE4EAF0.toInt()) }
-            content.addView(divider, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(activity, 1)))
+            ).apply { topMargin = dp(activity, 6) })
         }
         dialog.show()
     }
@@ -1133,7 +1163,6 @@ private class InspectorOverlay private constructor(
     }
 
     private fun close() {
-        InspectorControlState.restoreAll()
         (parent as? ViewGroup)?.removeView(this)
         QQInspectorRuntime.attach(activity)
     }
