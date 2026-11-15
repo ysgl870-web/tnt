@@ -380,6 +380,7 @@ private class InspectorOverlay private constructor(
             append("\n可聚焦：").append(node.focusable)
             append(" · 启用：").append(node.enabled)
             append("\n子控件数：").append(node.childCount)
+            append("\nviewInfo：").append(node.view.toString().take(1200))
             append("\n链接：\n").append(linkText)
             append("\n\n控件文本默认隐藏，防止误显示聊天内容。")
         }
@@ -436,6 +437,7 @@ private class InspectorOverlay private constructor(
         .put("enabled", node.enabled)
         .put("alpha", node.alpha.toDouble())
         .put("childCount", node.childCount)
+        .put("viewInfo", node.view.toString().take(1200))
         .put("links", JSONArray(node.links))
 
     private fun copyTree() {
