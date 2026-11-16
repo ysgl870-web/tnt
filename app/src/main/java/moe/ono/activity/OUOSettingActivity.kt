@@ -19,6 +19,7 @@ import android.view.WindowManager
 import androidx.annotation.CallSuper
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
+import androidx.preference.PreferenceCategory
 import com.google.android.material.appbar.AppBarLayout
 import com.google.android.material.color.DynamicColors
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
@@ -351,62 +352,90 @@ open class OUOSettingActivity : BaseActivity() {
     class SettingsFragmentNextStep(private val t: String) : PreferenceFragmentCompat() {
 
         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
-            preferenceManager.createPreferenceScreen(requireContext()).apply {
-                getDynamicSwitchSettings().forEach { settingItem ->
-                    if (settingItem.t == t){
-                        val preference = MaterialSwitchPreference(context).apply {
-                            key = settingItem.key
-                            title = settingItem.title
-                            summary = settingItem.summary
-                            icon = settingItem.iconResId?.let { context.getDrawable(it) }
-                            isChecked = settingItem.isSwitch
-                            isPersistent = false
-                            setOnPreferenceClickListener {
-                                handleItemClick(settingItem, isChecked)
-                                true
-                            }
-                        }
-                        addPreference(preference)
-                    }
+            val screen = preferenceManager.createPreferenceScreen(requireContext())
+            preferenceScreen = screen
 
-                }
-
-                getDynamicClickableSettings().forEach { settingItem ->
-                    if (settingItem.t == t){
-                        val preference = Preference(context).apply {
-                            key = settingItem.key
-                            title = settingItem.title
-                            summary = settingItem.summary
-                            icon = settingItem.iconResId?.let { context.getDrawable(it) }
-                            isPersistent = false
-                            setOnPreferenceClickListener {
-                                handleItemClick(settingItem, false)
-                                true
-                            }
-                        }
-                        addPreference(preference)
-                    }
-
-                }
-
-                when (t) {
-                    "娱乐功能" -> {
-                        val preference = MaterialSwitchPreference(context).apply {
-                            key = "发送假文件"
-                            title = "发送假文件"
-                            summary = "此选项需要配合“聊天与消息/快捷菜单”使用"
-                            isChecked = ConfigManager.getDefaultConfig().getBooleanOrFalse(PrekSendFakeFile)
-                            isPersistent = false
-                            setOnPreferenceClickListener {
-                                ConfigManager.getDefaultConfig().edit().putBoolean(PrekSendFakeFile, isChecked).apply()
-                                true
-                            }
-                        }
-                        addPreference(preference)
+            fun addSwitch(settingItem: SettingItem, target: PreferenceCategory? = null) {
+                val preference = MaterialSwitchPreference(requireContext()).apply {
+                    key = settingItem.key
+                    title = settingItem.title
+                    summary = settingItem.summary
+                    icon = settingItem.iconResId?.let { requireContext().getDrawable(it) }
+                    isChecked = settingItem.isSwitch
+                    isPersistent = false
+                    setOnPreferenceClickListener {
+                        handleItemClick(settingItem, isChecked)
+                        true
                     }
                 }
+                (target ?: screen).addPreference(preference)
+            }
 
-            }.also { preferenceScreen = it }
+            fun addAction(settingItem: SettingItem, target: PreferenceCategory? = null) {
+                val preference = Preference(requireContext()).apply {
+                    key = settingItem.key
+                    title = settingItem.title
+                    summary = settingItem.summary
+                    icon = settingItem.iconResId?.let { requireContext().getDrawable(it) }
+                    isPersistent = false
+                    setOnPreferenceClickListener {
+                        handleItemClick(settingItem, false)
+                        true
+                    }
+                }
+                (target ?: screen).addPreference(preference)
+            }
+
+            val switches = getDynamicSwitchSettings().filter { it.t == t }
+            val actions = getDynamicClickableSettings().filter { it.t == t }
+
+            if (t == "黑壳区") {
+                // QEdge-inspired functional center: concise groups, clear hierarchy and
+                // no giant flat list. Keep the actual ONO preference widgets and hook state.
+                val controlGroup = PreferenceCategory(requireContext()).apply {
+                    title = "控件探测与悬浮窗"
+                    summary = "控件扫描、选择、隐藏、恢复及悬浮操作面板"
+                }
+                val messageGroup = PreferenceCategory(requireContext()).apply {
+                    title = "消息与卡片提取"
+                    summary = "图片直链、Ark JSON、消息内容提取"
+                }
+                val recordGroup = PreferenceCategory(requireContext()).apply {
+                    title = "链接与提取记录"
+                    summary = "分类链接历史、上级页面与消息提取记录"
+                }
+                screen.addPreference(controlGroup)
+                screen.addPreference(messageGroup)
+                screen.addPreference(recordGroup)
+
+                fun groupFor(path: String): PreferenceCategory = when {
+                    path.contains("记录") || path.contains("链接") || path.contains("历史") -> recordGroup
+                    path.contains("消息") || path.contains("卡片") || path.contains("提取") -> messageGroup
+                    else -> controlGroup
+                }
+                switches.forEach { addSwitch(it, groupFor(it.path)) }
+                actions.forEach { addAction(it, groupFor(it.path)) }
+            } else {
+                switches.forEach { addSwitch(it) }
+                actions.forEach { addAction(it) }
+            }
+
+            when (t) {
+                "娱乐功能" -> {
+                    val preference = MaterialSwitchPreference(requireContext()).apply {
+                        key = "发送假文件"
+                        title = "发送假文件"
+                        summary = "此选项需要配合“聊天与消息/快捷菜单”使用"
+                        isChecked = ConfigManager.getDefaultConfig().getBooleanOrFalse(PrekSendFakeFile)
+                        isPersistent = false
+                        setOnPreferenceClickListener {
+                            ConfigManager.getDefaultConfig().edit().putBoolean(PrekSendFakeFile, isChecked).apply()
+                            true
+                        }
+                    }
+                    screen.addPreference(preference)
+                }
+            }
         }
 
         private fun handleItemClick(settingItem: SettingItem, isChecked: Boolean) {
@@ -414,47 +443,24 @@ open class OUOSettingActivity : BaseActivity() {
             val item = getItem(settingItem.clazz::class.java)
             if (item is BaseSwitchFunctionHookItem) {
                 item.isEnabled = isChecked
-                if (isChecked){
-                    item.startLoad()
-                }
+                if (isChecked) item.startLoad()
                 return
             }
 
             if (item is BaseClickableFunctionHookItem) {
                 when (item.path) {
-                    getItem(QQSurnamePredictor::class.java).path -> {
-                        showCFGDialogSurnamePredictor(item, requireContext())
-                    }
-                    getItem(StickerPanelEntry::class.java).path -> {
-                        showCFGDialogStickerPanelEntry(item, requireContext())
-                    }
-                    getItem(QQMessageTracker::class.java).path -> {
-                        showCFGDialogQQMessageTracker(item, requireContext())
-                    }
-                    getItem(SelfMessageReactor::class.java).path -> {
-                        showCFGDialogSelfMessageReactor(item, requireContext())
-                    }
-                    getItem(MessageEncryptor::class.java).path -> {
-                        showCFGDialogMessageEncryptor(item, requireContext())
-                    }
-                    getItem(QQBubbleRedirect::class.java).path -> {
-                        showCFGDialogQQBubbleRedirect(item, requireContext())
-                    }
-                    getItem(QQPacketHelperEntry::class.java).path -> {
-                        showCFGDialogQQPacketHelperEntry(item, requireContext())
-                    }
-                    getItem(FuckSport::class.java).path -> {
-                        FuckSport.showDialog(requireContext())
-                    }
-                    getItem(BottomShortcutMenu::class.java).path -> {
-                        BottomShortcutMenu.showCFGDialog(requireContext())
-                    }
-                    else -> {
-                        item.onClick(requireContext())
-                    }
+                    getItem(QQSurnamePredictor::class.java).path -> showCFGDialogSurnamePredictor(item, requireContext())
+                    getItem(StickerPanelEntry::class.java).path -> showCFGDialogStickerPanelEntry(item, requireContext())
+                    getItem(QQMessageTracker::class.java).path -> showCFGDialogQQMessageTracker(item, requireContext())
+                    getItem(SelfMessageReactor::class.java).path -> showCFGDialogSelfMessageReactor(item, requireContext())
+                    getItem(MessageEncryptor::class.java).path -> showCFGDialogMessageEncryptor(item, requireContext())
+                    getItem(QQBubbleRedirect::class.java).path -> showCFGDialogQQBubbleRedirect(item, requireContext())
+                    getItem(QQPacketHelperEntry::class.java).path -> showCFGDialogQQPacketHelperEntry(item, requireContext())
+                    getItem(FuckSport::class.java).path -> FuckSport.showDialog(requireContext())
+                    getItem(BottomShortcutMenu::class.java).path -> BottomShortcutMenu.showCFGDialog(requireContext())
+                    else -> item.onClick(requireContext())
                 }
             }
-
         }
     }
 
