@@ -1292,16 +1292,25 @@ private class InspectorOverlay private constructor(
         textSize = 12f
         gravity = Gravity.CENTER
         setTextColor(0xFFFFFFFF.toInt())
-        background = GradientDrawable().apply {
+        background = GradientDrawable(
+            GradientDrawable.Orientation.LEFT_RIGHT,
+            intArrayOf(0xFF087DBB.toInt(), 0xFF1456A0.toInt())
+        ).apply {
             shape = GradientDrawable.RECTANGLE
-            cornerRadius = dp(activity, 10).toFloat()
-            setColor(0xFF087DBB.toInt())
+            cornerRadius = dp(activity, 11).toFloat()
             setStroke(dp(activity, 1), 0x665DD7FF)
         }
         setPadding(dp(activity, 13), 0, dp(activity, 8), 0)
         isClickable = true
         isFocusable = true
-        setOnClickListener { runSafely(action) }
+        elevation = dp(activity, 2).toFloat()
+        setOnClickListener {
+            animate().scaleX(0.975f).scaleY(0.975f).alpha(0.88f).setDuration(70L).withEndAction {
+                animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(140L)
+                    .setInterpolator(android.view.animation.DecelerateInterpolator()).start()
+                runSafely(action)
+            }.start()
+        }
     }
 
     private fun toggleMultiSelect() {
@@ -1747,8 +1756,9 @@ private class InspectorOverlay private constructor(
         val fallback = Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE)
         if (launch(fallback, if (isWebUrl) "系统默认浏览器" else "系统应用")) return true
 
-        // Some QQ-specific schemes do not declare BROWSABLE; retry without it.
-        if (isQQScheme) {
+        // Custom schemes often omit CATEGORY_BROWSABLE. Retry QQ/TIM without
+        // that category so app-specific deep-link filters can still match.
+        if (!isWebUrl) {
             for (pkg in listOf("com.tencent.mobileqq", "com.tencent.tim")) {
                 if (launch(Intent(Intent.ACTION_VIEW, uri).setPackage(pkg), if (pkg == "com.tencent.mobileqq") "QQ" else "TIM")) return true
             }
