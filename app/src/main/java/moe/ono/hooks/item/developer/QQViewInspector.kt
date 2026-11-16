@@ -1394,12 +1394,18 @@ private class InspectorOverlay private constructor(
 
     /** Re-scan visible views and aggregate links, image sources and Ark payloads. */
     private fun scanCurrentPage() {
+        showInspectorToast("正在从上到下扫描页面…")
+        boxes.animateScan {
+            scanCurrentPageData()
+        }
+    }
+
+    private fun scanCurrentPageData() {
         runSafely {
             val activityLinks = QQInspectorLinks.captureActivity(activity)
             val scanned = InspectorTree.collect(activity)
             nodes = scanned
             boxes.setNodes(nodes)
-            boxes.animateScan()
             val links = (activityLinks + scanned.flatMap { it.directLinks + it.links } +
                 QQMsgExtractStore.allLinks()).distinct()
             val images = (scanned.flatMap { it.imageLinks } + QQMsgExtractStore.allImages()).distinct()
@@ -1998,12 +2004,21 @@ private class InspectorOverlay private constructor(
         private val sweepPaint = Paint(Paint.ANTI_ALIAS_FLAG)
         private var scanProgress = 0f
         private var scanAnimator: ValueAnimator? = null
-        fun animateScan() {
+        fun animateScan(onFinished: () -> Unit) {
             scanAnimator?.cancel()
             scanProgress = 0f
             scanAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
-                duration = 1150L
+                duration = 1050L
                 addUpdateListener { scanProgress = it.animatedValue as Float; invalidate() }
+                addListener(object : android.animation.AnimatorListenerAdapter() {
+                    private var cancelled = false
+                    override fun onAnimationCancel(animation: android.animation.Animator) { cancelled = true }
+                    override fun onAnimationEnd(animation: android.animation.Animator) {
+                        scanProgress = 0f
+                        invalidate()
+                        if (!cancelled) onFinished()
+                    }
+                })
                 start()
             }
         }
