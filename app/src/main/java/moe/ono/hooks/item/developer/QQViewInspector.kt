@@ -958,7 +958,7 @@ private class MorphMenuHandleView(
         strokeWidth = 2.6f * density
         strokeCap = Paint.Cap.ROUND
     }
-    private var morph = 0f
+    private var morph = 1f
     private var animator: ValueAnimator? = null
     private val spring = TimeInterpolator { input ->
         val t = input.coerceIn(0f, 1f)
@@ -977,6 +977,7 @@ private class MorphMenuHandleView(
             setStroke((1f * density).toInt().coerceAtLeast(1), 0x9958BDEB.toInt())
         }
         elevation = 16f * density
+        visibility = View.GONE
         setOnClickListener { onOpen() }
     }
 
@@ -991,8 +992,12 @@ private class MorphMenuHandleView(
                 invalidate()
             }
             if (onEnd != null) addListener(object : android.animation.AnimatorListenerAdapter() {
+                private var cancelled = false
+                override fun onAnimationCancel(animation: android.animation.Animator) {
+                    cancelled = true
+                }
                 override fun onAnimationEnd(animation: android.animation.Animator) {
-                    onEnd()
+                    if (!cancelled) onEnd()
                 }
             })
             start()
