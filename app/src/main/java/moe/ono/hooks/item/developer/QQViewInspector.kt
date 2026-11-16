@@ -1714,7 +1714,7 @@ private class InspectorOverlay private constructor(
             return try {
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 activity.startActivity(intent)
-                showInspectorToast("已交给$label打开")
+                showInspectorToast("已交给${label}打开")
                 true
             } catch (error: Throwable) {
                 Logger.w("TNT link open via $label failed: ${error.javaClass.simpleName}")
