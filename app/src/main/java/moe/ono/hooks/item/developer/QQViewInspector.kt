@@ -1599,11 +1599,31 @@ private class InspectorOverlay private constructor(
             })
         }
         fun actionButton(label: String, callback: () -> Unit) {
-            panel.addView(android.widget.Button(activity).apply {
+            val button = TextView(activity).apply {
                 text = label
-                setOnClickListener { callback() }
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(activity, 44)).apply {
-                topMargin = dp(activity, 5)
+                textSize = 13f
+                gravity = Gravity.CENTER
+                setTextColor(0xFFFFFFFF.toInt())
+                isClickable = true
+                isFocusable = true
+                elevation = dp(activity, 3).toFloat()
+                background = GradientDrawable(
+                    GradientDrawable.Orientation.LEFT_RIGHT,
+                    intArrayOf(0xFF087DBB.toInt(), 0xFF1456A0.toInt())
+                ).apply {
+                    cornerRadius = dp(activity, 12).toFloat()
+                    setStroke(dp(activity, 1), 0x995DD7FF.toInt())
+                }
+                setPadding(dp(activity, 12), 0, dp(activity, 12), 0)
+                setOnClickListener {
+                    animate().scaleX(0.97f).scaleY(0.97f).setDuration(75L).withEndAction {
+                        animate().scaleX(1f).scaleY(1f).setDuration(125L).start()
+                        callback()
+                    }.start()
+                }
+            }
+            panel.addView(button, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(activity, 46)).apply {
+                topMargin = dp(activity, 7)
             })
         }
         textLine("捕获时间：$time")
@@ -1623,12 +1643,18 @@ private class InspectorOverlay private constructor(
             actionButton("复制上级界面链接") { copyText(activity, "上级界面链接", parent) }
         }
         actionButton("复制抓取链接") { copyText(activity, category, url) }
-        val scroll = android.widget.ScrollView(activity).apply { addView(panel) }
+        val scroll = android.widget.ScrollView(activity).apply {
+            addView(panel)
+            alpha = 0f
+            translationY = dp(activity, 14).toFloat()
+        }
         AlertDialog.Builder(activity)
             .setTitle("链接捕获详情")
             .setView(scroll)
             .setNegativeButton("关闭", null)
             .show()
+        scroll.animate().alpha(1f).translationY(0f).setDuration(220L)
+            .setInterpolator(android.view.animation.DecelerateInterpolator()).start()
     }
 
     private fun showParentLink(parentUrl: String) {
@@ -1655,21 +1681,80 @@ private class InspectorOverlay private constructor(
             .show()
     }
 
-    private fun openHistoryUrl(url: String, preferQQ: Boolean) {
-        val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return
-        if (preferQQ) {
-            for (pkg in listOf("com.tencent.mobileqq", "com.tencent.tim")) {
-                val intent = Intent(Intent.ACTION_VIEW, uri).setPackage(pkg).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                try {
-                    activity.startActivity(intent)
-                    return
-                } catch (_: Throwable) {
-                    // Try the other QQ package, then allow Android to resolve normally.
-                }
+    /**
+     * Open captured links with an explicit, predictable fallback chain.
+     * Web URLs: QQ -> TIM -> installed browser -> Android resolver.
+     * QQ custom schemes: QQ -> TIM -> Android resolver (never force a browser).
+     */
+    private fun openHistoryUrl(url: String, preferQQ: Boolean): Boolean {
+        val value = url.trim()
+        if (value.isEmpty()) {
+            showInspectorToast("链接内容为空，无法跳转")
+            return false
+        }
+        val uri = runCatching { Uri.parse(value) }.getOrNull()
+        val scheme = uri?.scheme?.lowercase(Locale.ROOT)
+        if (uri == null || scheme.isNullOrBlank()) {
+            showInspectorToast("链接格式无效，无法跳转")
+            return false
+        }
+        val isWebUrl = scheme == "http" || scheme == "https"
+        val isQQScheme = scheme == "mqq" || scheme == "mqqapi" || scheme == "tim"
+
+        fun launch(intent: Intent, label: String): Boolean {
+            return try {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                activity.startActivity(intent)
+                showInspectorToast("已交给$label打开")
+                true
+            } catch (error: Throwable) {
+                Logger.w("TNT link open via $label failed: ${error.javaClass.simpleName}")
+                false
             }
         }
-        runCatching { activity.startActivity(Intent(Intent.ACTION_VIEW, uri)) }
-            .onFailure { showInspectorToast("无法打开链接：${it.javaClass.simpleName}") }
+
+        val qqFirst = preferQQ || isQQScheme || !isWebUrl
+        if (qqFirst) {
+            for (pkg in listOf("com.tencent.mobileqq", "com.tencent.tim")) {
+                val intent = Intent(Intent.ACTION_VIEW, uri)
+                    .addCategory(Intent.CATEGORY_BROWSABLE)
+                    .setPackage(pkg)
+                if (launch(intent, if (pkg == "com.tencent.mobileqq") "QQ" else "TIM")) return true
+            }
+        }
+
+        // For ordinary web links, explicitly try known browser packages before
+        // the generic resolver. This avoids silently returning to the same QQ handler.
+        if (isWebUrl) {
+            val browsers = listOf(
+                "com.android.chrome",
+                "com.google.android.apps.chrome",
+                "com.android.browser",
+                "com.sec.android.app.sbrowser",
+                "org.mozilla.firefox",
+                "com.microsoft.emmx",
+                "com.brave.browser",
+                "com.opera.browser"
+            )
+            for (pkg in browsers) {
+                val intent = Intent(Intent.ACTION_VIEW, uri)
+                    .addCategory(Intent.CATEGORY_BROWSABLE)
+                    .setPackage(pkg)
+                if (launch(intent, "浏览器")) return true
+            }
+        }
+
+        val fallback = Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE)
+        if (launch(fallback, if (isWebUrl) "系统默认浏览器" else "系统应用")) return true
+
+        // Some QQ-specific schemes do not declare BROWSABLE; retry without it.
+        if (isQQScheme) {
+            for (pkg in listOf("com.tencent.mobileqq", "com.tencent.tim")) {
+                if (launch(Intent(Intent.ACTION_VIEW, uri).setPackage(pkg), if (pkg == "com.tencent.mobileqq") "QQ" else "TIM")) return true
+            }
+        }
+        showInspectorToast(if (isWebUrl) "未找到可用浏览器或 QQ 页面入口" else "QQ / TIM 未能处理此 Scheme 链接")
+        return false
     }
 
     private fun showList() {
