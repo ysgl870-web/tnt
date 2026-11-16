@@ -105,8 +105,8 @@ private object QQInspectorAppearanceDialog {
     )
     fun show(context: Context) {
         val cfg = ConfigManager.getDefaultConfig()
-        val alpha = cfg.getInt(ALPHA_KEY, 94).coerceIn(35, 100)
-        var color = cfg.getInt(COLOR_KEY, 0x182740)
+        val alpha = cfg.getIntOrDefault(ALPHA_KEY, 94).coerceIn(35, 100)
+        var color = cfg.getIntOrDefault(COLOR_KEY, 0x182740)
         val content = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(context, 20), dp(context, 12), dp(context, 20), dp(context, 8))
@@ -1102,8 +1102,8 @@ private class InspectorOverlay private constructor(
             shape = GradientDrawable.RECTANGLE
             cornerRadius = dp(activity, 16).toFloat()
             val cfg = ConfigManager.getDefaultConfig()
-            val alpha = cfg.getInt("tnt_qq_inspector_panel_alpha", 94).coerceIn(35, 100)
-            val rgb = cfg.getInt("tnt_qq_inspector_panel_color", 0x182740) and 0x00FFFFFF
+            val alpha = cfg.getIntOrDefault("tnt_qq_inspector_panel_alpha", 94).coerceIn(35, 100)
+            val rgb = cfg.getIntOrDefault("tnt_qq_inspector_panel_color", 0x182740) and 0x00FFFFFF
             setColor(((alpha * 255 / 100) shl 24) or rgb)
             setStroke(dp(activity, 1), 0x9958BDEB.toInt())
         }
@@ -1201,7 +1201,7 @@ private class InspectorOverlay private constructor(
                         val dy = event.rawY - panelDragY
                         val maxX = (root.width - toolbarScroll.width - lp.marginEnd).toFloat().coerceAtLeast(0f)
                         val maxY = (root.height - toolbarScroll.height).toFloat().coerceAtLeast(0f)
-                        toolbarScroll.translationX = (panelStartX + dx).coerceIn(-maxX, maxX)
+                        toolbarScroll.translationX = (panelStartX + dx).coerceIn(-maxX, 0f)
                         toolbarScroll.translationY = (panelStartY + dy).coerceIn(-maxY, maxY)
                         true
                     }
