@@ -6,6 +6,7 @@ import moe.ono.hooks._core.annotation.HookItem
 import moe.ono.hooks.item.chat.MessageEncryptor
 import moe.ono.hooks.item.chat.FakeFileRecall
 import moe.ono.hooks.item.chat.StickerPanelEntry
+import moe.ono.hooks.item.developer.QQMessageExtractor
 import moe.ono.hooks.item.developer.QQMessageFetcher
 import moe.ono.hooks.item.entertainment.ModifyTextMessage
 import moe.ono.hooks.item.entertainment.RespondFace
@@ -19,6 +20,7 @@ class MenuBuilderHook : ApiHookItem() {
         StickerPanelEntry(),
         QQMessageTracker(),
         QQMessageFetcher(),
+        QQMessageExtractor(),
         ModifyTextMessage(),
         RespondFace(),
         MessageEncryptor(),

@@ -31,6 +31,7 @@ import android.widget.TextView
 import android.widget.Toast
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
+import moe.ono.extract.QQMsgExtractStore
 import moe.ono.hooks._base.BaseClickableFunctionHookItem
 import moe.ono.hooks._base.BaseSwitchFunctionHookItem
 import moe.ono.hooks._core.annotation.HookItem
@@ -57,7 +58,7 @@ import kotlin.math.min
  * captures screenshots, or transmits data to a server.
  */
 @HookItem(
-    path = "开发者选项/QQ界面控件探测器",
+    path = "黑壳区/控件探测器",
     description = "开启后在 QQ 页面显示「控件」入口；可绘制控件边框、按面积从小到大列出控件，并查看类名、资源ID、坐标、透明度和链接。读取文本需单独确认。"
 )
 class QQViewInspector : BaseSwitchFunctionHookItem() {
@@ -70,46 +71,142 @@ class QQViewInspector : BaseSwitchFunctionHookItem() {
     override fun entry(classLoader: ClassLoader) {
         QQInspectorRuntime.install()
         QQInspectorLinks.install(classLoader)
-        runCatching { ContextUtils.getCurrentActivity()?.let { if (ConfigManager.getDefaultConfig().getBooleanOrFalse(Constants.PrekXXX + path)) QQInspectorRuntime.attach(it) } }
+        runCatching {
+            val config = ConfigManager.getDefaultConfig()
+            val newKey = Constants.PrekXXX + path
+            val legacyKey = Constants.PrekXXX + "开发者选项/QQ界面控件探测器"
+            if (config.getBooleanOrFalse(legacyKey) && !config.getBooleanOrFalse(newKey)) {
+                config.edit().putBoolean(newKey, true).putBoolean(legacyKey, false).apply()
+            }
+            ContextUtils.getCurrentActivity()?.let { if (config.getBooleanOrFalse(newKey)) QQInspectorRuntime.attach(it) }
+        }
         Logger.i("TNT QQViewInspector installed")
     }
 }
 
 /**
- * A one-shot history viewer. Link capture is activated with QQ界面控件探测器.
+ * A one-shot history viewer. Link capture is activated with 黑壳区控件探测器.
  */
 @HookItem(
-    path = "开发者选项/查看QQ链接记录",
-    description = "查看本机保存的最近100条QQ Scheme、Activity跳转和WebView页面链接；支持复制与清空。"
+    path = "黑壳区/链接记录",
+    description = "按图片直链、卡片 JSON、跳转链接分类查看；相同内容合并并可展开捕获时间与上级页面。"
 )
 class QQInspectorLinkHistory : BaseClickableFunctionHookItem() {
     override fun entry(classLoader: ClassLoader) = Unit
 
     override fun onClick(context: Context) {
-        val rows = QQInspectorLinks.readAll()
-        val format = SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault())
-        val text = if (rows.isEmpty()) {
-            "暂无链接记录。先开启「QQ界面控件探测器」，再正常浏览 QQ 页面。"
-        } else {
-            rows.asReversed().joinToString("\n\n") { row ->
-                val time = format.format(Date(row.optLong("time")))
-                "[$time] ${row.optString("kind")} · ${row.optString("source")}\n" +
-                    row.optString("url")
-            }
-        }
+        QQInspectorLinkHistoryDialog.show(context)
+    }
+}
 
+/** The same grouped history UI is available from both the floating inspector and module settings. */
+private object QQInspectorLinkHistoryDialog {
+    fun show(context: Context) {
+        val rows = QQInspectorLinks.readAll()
+        val categories = listOf("图片直链", "卡片 JSON", "跳转链接")
+        val labels = categories.map { category ->
+            val count = rows.count { categoryOf(it.optString("kind")) == category }
+            "$category（$count 条记录）"
+        }.toMutableList()
+        labels.add("导出全部记录为 JSON")
+        labels.add("清空全部记录（${rows.size}）")
         AlertDialog.Builder(context)
-            .setTitle("QQ 链接记录（${rows.size}/100）")
-            .setMessage(text)
-            .setPositiveButton("复制全部") { _, _ ->
-                copyText(context, "QQ 链接记录", text)
-            }
-            .setNeutralButton("清空") { _, _ ->
-                QQInspectorLinks.clear()
-                Toast.makeText(context, "本地链接记录已清空", Toast.LENGTH_SHORT).show()
+            .setTitle("黑壳区 · 链接记录")
+            .setItems(labels.toTypedArray()) { _, which ->
+                when (which) {
+                    0, 1, 2 -> showGroups(context, rows.filter { categoryOf(it.optString("kind")) == categories[which] }, categories[which])
+                    3 -> copyText(context, "QQ链接记录", QQInspectorLinks.exportJson())
+                    4 -> AlertDialog.Builder(context).setTitle("清空全部链接记录？")
+                        .setMessage("只清除 TNT 本机记录，不会删除 QQ 聊天内容。")
+                        .setPositiveButton("清空") { _, _ ->
+                            QQInspectorLinks.clear()
+                            Toast.makeText(context, "本地链接记录已清空", Toast.LENGTH_SHORT).show()
+                        }
+                        .setNegativeButton("取消", null).show()
+                }
             }
             .setNegativeButton("关闭", null)
             .show()
+    }
+
+    private fun categoryOf(kind: String): String = when {
+        QQInspectorLinks.isImageKind(kind) -> "图片直链"
+        QQInspectorLinks.isCardJsonKind(kind) -> "卡片 JSON"
+        else -> "跳转链接"
+    }
+
+    private fun showGroups(context: Context, rows: List<JSONObject>, category: String) {
+        if (rows.isEmpty()) {
+            Toast.makeText(context, "该分类暂无记录", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val groups = rows.groupBy { it.optString("url") }.filterKeys { it.isNotBlank() }
+            .entries.sortedByDescending { it.value.maxOfOrNull { row -> row.optLong("time") } ?: 0L }
+        val formatter = SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault())
+        val labels = groups.map { (url, events) ->
+            val latest = events.maxByOrNull { it.optLong("time") }
+            val shown = latest?.optString("display", url).orEmpty().replace('\n', ' ')
+            "${events.size} 次捕获 · ${shown.take(150)}\n最近：${formatter.format(Date(latest?.optLong("time") ?: 0L))}"
+        }.toTypedArray()
+        AlertDialog.Builder(context)
+            .setTitle("$category · ${groups.size} 个不同内容")
+            .setItems(labels) { _, which -> groups.getOrNull(which)?.let { showEvents(context, category, it.key, it.value) } }
+            .setPositiveButton("导出本分类") { _, _ ->
+                copyText(context, category, JSONArray().apply { rows.forEach { put(JSONObject(it.toString())) } }.toString(2))
+            }
+            .setNegativeButton("返回") { _, _ -> show(context) }
+            .show()
+    }
+
+    private fun showEvents(context: Context, category: String, url: String, events: List<JSONObject>) {
+        val sorted = events.sortedByDescending { it.optLong("time") }
+        val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+        val labels = sorted.map { row ->
+            val parent = row.optString("parentUrl")
+            "${formatter.format(Date(row.optLong("time")))}\n来源：${row.optString("source")}" +
+                if (parent.isNotBlank()) "\n上级：${QQInspectorLinks.mask(parent).take(110)}" else ""
+        }.toTypedArray()
+        AlertDialog.Builder(context)
+            .setTitle("$category · ${sorted.size} 次捕获")
+            .setItems(labels) { _, which -> sorted.getOrNull(which)?.let { showEventDetail(context, category, url, it) } }
+            .setPositiveButton("复制链接") { _, _ -> copyText(context, category, url) }
+            .setNegativeButton("返回") { _, _ -> showGroups(context, QQInspectorLinks.readAll().filter { categoryOf(it.optString("kind")) == category }, category) }
+            .show()
+    }
+
+    private fun showEventDetail(context: Context, category: String, url: String, row: JSONObject) {
+        val parent = row.optString("parentUrl")
+        val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+        val detail = "时间：${formatter.format(Date(row.optLong("time")))}\n来源：${row.optString("source")}\n\n" +
+            "链接：\n${row.optString("display", url)}" +
+            if (parent.isNotBlank()) "\n\n上级页面：\n${QQInspectorLinks.mask(parent)}" else "\n\n未捕获到上级页面链接"
+        val builder = AlertDialog.Builder(context).setTitle("捕获详情").setMessage(detail)
+            .setPositiveButton("复制完整内容") { _, _ -> copyText(context, category, url) }
+            .setNegativeButton("跳转") { _, _ -> launch(context, url, !QQInspectorLinks.isImageKind(row.optString("kind"))) }
+        if (parent.isNotBlank()) builder.setNeutralButton("查看上级链接") { _, _ -> showParent(context, parent) }
+        builder.show()
+    }
+
+    private fun showParent(context: Context, parent: String) {
+        AlertDialog.Builder(context).setTitle("上级页面链接")
+            .setMessage(QQInspectorLinks.mask(parent) + "\n\n这是捕获该跳转时所在的来源页面。")
+            .setPositiveButton("复制") { _, _ -> copyText(context, "上级页面链接", parent) }
+            .setNeutralButton("优先在 QQ 中打开") { _, _ -> launch(context, parent, true) }
+            .setNegativeButton("关闭", null).show()
+    }
+
+    private fun launch(context: Context, url: String, preferQQ: Boolean) {
+        val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return
+        if (preferQQ) {
+            for (pkg in listOf("com.tencent.mobileqq", "com.tencent.tim")) {
+                try {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, uri).setPackage(pkg).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    return
+                } catch (_: Throwable) { }
+            }
+        }
+        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            .onFailure { Toast.makeText(context, "无法打开链接：${it.javaClass.simpleName}", Toast.LENGTH_SHORT).show() }
     }
 }
 
@@ -167,7 +264,7 @@ private object QQInspectorRuntime {
     }
 
     private fun isEnabled(): Boolean = runCatching {
-        ConfigManager.getDefaultConfig().getBooleanOrFalse(Constants.PrekXXX + "开发者选项/QQ界面控件探测器")
+        ConfigManager.getDefaultConfig().getBooleanOrFalse(Constants.PrekXXX + "黑壳区/控件探测器")
     }.getOrDefault(false)
 
     fun detach(activity: Activity) {
@@ -284,6 +381,7 @@ private object InspectorTree {
                 val directLinks = collectLinks(view)
                 val imageLinks = collectImageLinks(view)
                 val cardJsons = collectCardJson(view)
+                val cardLinks = cardJsons.flatMap { QQInspectorLinks.extractUrls(it) }
                 result.add(
                     InspectorNode(
                         view = view,
@@ -303,7 +401,7 @@ private object InspectorTree {
                         directLinks = directLinks,
                         imageLinks = imageLinks,
                         cardJsons = cardJsons,
-                        links = (directLinks + pageLinks + imageLinks).distinct()
+                        links = (directLinks + pageLinks + imageLinks + cardLinks).distinct()
                     )
                 )
             }
@@ -478,6 +576,14 @@ private object InspectorTree {
                     QQInspectorLinks.sanitize(span.url)?.let(found::add)
                 }
             }
+            // 很多控件里的链接只是纯文本，没有 URLSpan，这里补一层正则解析
+            val plain = runCatching { value?.toString() }.getOrNull()
+            if (!plain.isNullOrBlank()) {
+                QQInspectorLinks.extractUrls(plain).take(16).forEach { url ->
+                    QQInspectorLinks.add("TEXT_URL", url, view.javaClass.simpleName)
+                    QQInspectorLinks.sanitize(url)?.let(found::add)
+                }
+            }
         }
 
         val className = view.javaClass.name
@@ -508,7 +614,7 @@ private object InspectorTree {
             }.trim()
             if (raw.length !in 5..4096) return
             val scheme = runCatching { Uri.parse(raw).scheme?.lowercase(Locale.ROOT) }.getOrNull()
-            if (scheme !in setOf("http", "https", "mqq", "mqqapi", "qq", "tencent")) return
+            if (scheme !in setOf("http", "https", "mqq", "mqqapi", "mqqwpa", "qqdocurl", "qq", "tencent")) return
             QQInspectorLinks.add("VIEW_MODEL_LINK", raw, "$className/$source")
             QQInspectorLinks.sanitize(raw)?.let(found::add)
         }
@@ -814,21 +920,38 @@ private class InspectorOverlay private constructor(
 
     private val boxes = InspectorBoxLayer(activity)
     private val toolbar = LinearLayout(activity).apply {
-        orientation = LinearLayout.HORIZONTAL
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(activity, 10), dp(activity, 10), dp(activity, 10), dp(activity, 10))
+        background = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dp(activity, 16).toFloat()
+            setColor(0xF0182740.toInt())
+            setStroke(dp(activity, 1), 0x9958BDEB.toInt())
+        }
+        elevation = dp(activity, 16).toFloat()
+    }
+    private val toolbarScroll = android.widget.ScrollView(activity).apply {
+        isVerticalScrollBarEnabled = false
+        overScrollMode = View.OVER_SCROLL_NEVER
+        addView(toolbar, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+    }
+    private val panelHandle = TextView(activity).apply {
+        text = "TNT\n工具"
+        textSize = 13f
+        gravity = Gravity.CENTER
+        setTextColor(0xFFFFFFFF.toInt())
         setPadding(dp(activity, 8), dp(activity, 8), dp(activity, 8), dp(activity, 8))
         background = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = dp(activity, 14).toFloat()
             setColor(0xF0182740.toInt())
-            setStroke(dp(activity, 1), 0x6658BDEB)
+            setStroke(dp(activity, 1), 0x9958BDEB.toInt())
         }
-        elevation = dp(activity, 12).toFloat()
+        elevation = dp(activity, 16).toFloat()
+        isClickable = true
+        setOnClickListener { setPanelExpanded(true) }
     }
-    private val toolbarScroll = HorizontalScrollView(activity).apply {
-        isHorizontalScrollBarEnabled = false
-        overScrollMode = View.OVER_SCROLL_NEVER
-        addView(toolbar, ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-    }
+    private var panelExpanded = true
     private var bordersVisible = true
     private var pickMode = false
     private var multiSelect = false
@@ -840,16 +963,15 @@ private class InspectorOverlay private constructor(
         isClickable = false
         isFocusable = false
         addView(boxes, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
-        val toolbarParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT, Gravity.TOP)
-        val rootLocation = IntArray(2)
-        root.getLocationOnScreen(rootLocation)
-        val statusBarId = activity.resources.getIdentifier("status_bar_height", "dimen", "android")
-        val statusBarHeight = if (statusBarId > 0) {
-            runCatching { activity.resources.getDimensionPixelSize(statusBarId) }.getOrDefault(0)
-        } else 0
-        // Some QQ pages are edge-to-edge; offset the toolbar only when content begins behind the status bar.
-        toolbarParams.topMargin = (statusBarHeight - rootLocation[1]).coerceAtLeast(0)
-        addView(toolbarScroll, toolbarParams)
+        val panelParams = LayoutParams(dp(activity, 204), dp(activity, 360), Gravity.END or Gravity.CENTER_VERTICAL).apply {
+            marginEnd = dp(activity, 12)
+        }
+        addView(toolbarScroll, panelParams)
+        val handleParams = LayoutParams(dp(activity, 60), dp(activity, 60), Gravity.END or Gravity.CENTER_VERTICAL).apply {
+            marginEnd = dp(activity, 12)
+        }
+        addView(panelHandle, handleParams)
+        setPanelExpanded(true)
         boxes.setNodes(nodes)
         boxes.setPickMode(false)
         boxes.setOnSelectionChanged { views ->
@@ -873,27 +995,40 @@ private class InspectorOverlay private constructor(
         buildToolbar()
     }
 
-    private fun buildToolbar() {
-        toolbar.removeAllViews()
-        toolbar.addView(toolButton("控件列表 ${nodes.size}") { showList() }, buttonParams())
-        toolbar.addView(toolButton(if (pickMode) "点选:开" else "点选:关") { togglePickMode() }, buttonParams())
-        toolbar.addView(toolButton(if (multiSelect) "多选:开 ${selectedViews.size}" else "多选:关") { toggleMultiSelect() }, buttonParams())
-        if (selectedViews.isNotEmpty()) toolbar.addView(toolButton("批量操作(${selectedViews.size})") { showBatchActions() }, buttonParams())
-        toolbar.addView(toolButton("刷新") { refresh() }, buttonParams())
-        toolbar.addView(toolButton(if (bordersVisible) "边框:开" else "边框:关") { toggleBorders() }, buttonParams())
-        toolbar.addView(toolButton("恢复控件") { restoreControls() }, buttonParams())
-        toolbar.addView(toolButton("清除持续规则") { clearPersistentRules() }, buttonParams())
-        toolbar.addView(toolButton("扫描本页") { scanCurrentPage() }, buttonParams())
-        toolbar.addView(toolButton("拉取卡片") { pullCardData() }, buttonParams())
-        toolbar.addView(toolButton("保存全部链接") { saveCurrentLinks() }, buttonParams())
-        toolbar.addView(toolButton("链接记录") { showLinkHistory() }, buttonParams())
-        toolbar.addView(toolButton("复制结构") { copyTree() }, buttonParams())
-        toolbar.addView(toolButton("停用探测") { disableFeature() }, buttonParams())
-        toolbar.addView(toolButton("关闭") { close() }, buttonParams())
+    private fun setPanelExpanded(expanded: Boolean) {
+        panelExpanded = expanded
+        toolbarScroll.visibility = if (expanded) View.VISIBLE else View.GONE
+        panelHandle.visibility = if (expanded) View.GONE else View.VISIBLE
     }
 
-    private fun buttonParams() = LinearLayout.LayoutParams(dp(activity, 82), dp(activity, 42)).apply {
-        marginEnd = dp(activity, 4)
+    private fun buildToolbar() {
+        toolbar.removeAllViews()
+        toolbar.addView(TextView(activity).apply {
+            text = "TNT 控件工具箱"
+            textSize = 14f
+            setTextColor(0xFFFFFFFF.toInt())
+            setPadding(dp(activity, 8), dp(activity, 2), dp(activity, 8), dp(activity, 10))
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        toolbar.addView(toolButton("收起悬浮面板") { setPanelExpanded(false) }, buttonParams())
+        toolbar.addView(toolButton("控件列表 · ${nodes.size}") { showList() }, buttonParams())
+        toolbar.addView(toolButton(if (pickMode) "点选模式：开启" else "点选模式：关闭") { togglePickMode() }, buttonParams())
+        toolbar.addView(toolButton(if (multiSelect) "多选模式：开启 · ${selectedViews.size}" else "多选模式：关闭") { toggleMultiSelect() }, buttonParams())
+        if (selectedViews.isNotEmpty()) toolbar.addView(toolButton("批量操作 · ${selectedViews.size}") { showBatchActions() }, buttonParams())
+        toolbar.addView(toolButton("刷新控件") { refresh() }, buttonParams())
+        toolbar.addView(toolButton(if (bordersVisible) "控件边框：显示" else "控件边框：隐藏") { toggleBorders() }, buttonParams())
+        toolbar.addView(toolButton("恢复隐藏 / 移除控件") { restoreControls() }, buttonParams())
+        toolbar.addView(toolButton("清除持续规则") { clearPersistentRules() }, buttonParams())
+        toolbar.addView(toolButton("扫描当前页面") { scanCurrentPage() }, buttonParams())
+        toolbar.addView(toolButton("拉取图片 / 卡片数据") { pullCardData() }, buttonParams())
+        toolbar.addView(toolButton("保存页面链接") { saveCurrentLinks() }, buttonParams())
+        toolbar.addView(toolButton("链接分类记录") { showLinkHistory() }, buttonParams())
+        toolbar.addView(toolButton("复制控件结构") { copyTree() }, buttonParams())
+        toolbar.addView(toolButton("停用探测功能") { disableFeature() }, buttonParams())
+        toolbar.addView(toolButton("关闭悬浮探测") { close() }, buttonParams())
+    }
+
+    private fun buttonParams() = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(activity, 42)).apply {
+        bottomMargin = dp(activity, 5)
     }
 
     private fun showInspectorToast(message: String) {
@@ -937,7 +1072,7 @@ private class InspectorOverlay private constructor(
             setColor(0xFF087DBB.toInt())
             setStroke(dp(activity, 1), 0x665DD7FF)
         }
-        setPadding(dp(activity, 5), 0, dp(activity, 5), 0)
+        setPadding(dp(activity, 13), 0, dp(activity, 8), 0)
         isClickable = true
         isFocusable = true
         setOnClickListener { runSafely(action) }
@@ -1038,12 +1173,14 @@ private class InspectorOverlay private constructor(
             val scanned = InspectorTree.collect(activity)
             nodes = scanned
             boxes.setNodes(nodes)
-            val links = (activityLinks + scanned.flatMap { it.directLinks + it.links }).distinct()
-            val images = scanned.flatMap { it.imageLinks }.distinct()
-            val cards = scanned.flatMap { it.cardJsons }.distinct()
+            val links = (activityLinks + scanned.flatMap { it.directLinks + it.links } +
+                QQMsgExtractStore.allLinks()).distinct()
+            val images = (scanned.flatMap { it.imageLinks } + QQMsgExtractStore.allImages()).distinct()
+            val cards = (scanned.flatMap { it.cardJsons } + QQMsgExtractStore.allCards()).distinct()
             val report = buildString {
                 append("TNT 当前页面扫描结果")
                 append("\n控件：").append(scanned.size)
+                append("\n已提取消息：").append(QQMsgExtractStore.size()).append(" 条")
                 append("\n跳转 / 页面链接：").append(links.size)
                 append("\n图片直链：").append(images.size)
                 append("\nArk 卡片 JSON：").append(cards.size)
@@ -1083,18 +1220,24 @@ private class InspectorOverlay private constructor(
             val scanned = InspectorTree.collect(activity)
             nodes = scanned
             boxes.setNodes(nodes)
-            val cards = scanned.flatMap { it.cardJsons }.distinct()
-            if (cards.isEmpty()) {
-                showInspectorToast("已重新拉取当前页面数据，但 QQ 未向可见控件暴露卡片 JSON")
+            val cards = (scanned.flatMap { it.cardJsons } + QQMsgExtractStore.allCards()).distinct()
+            val images = (scanned.flatMap { it.imageLinks } + QQMsgExtractStore.allImages()).distinct()
+            if (cards.isEmpty() && images.isEmpty()) {
+                showInspectorToast("已重新拉取当前页面；暂未发现可用图片直链或卡片数据")
                 buildToolbar()
                 return@runSafely
             }
-            val combined = cards.mapIndexed { index, json -> "/* Ark Card ${index + 1} */\n$json" }.joinToString("\n\n")
+            val combined = buildString {
+                append("图片直链（").append(images.size).append("）\n")
+                append(if (images.isEmpty()) "未发现" else images.joinToString("\n"))
+                append("\n\nArk 卡片 JSON（").append(cards.size).append("）")
+                cards.forEachIndexed { index, json -> append("\n\n--- 卡片 ").append(index + 1).append(" ---\n").append(json) }
+            }
             AlertDialog.Builder(activity)
-                .setTitle("已拉取 ${cards.size} 份卡片数据")
-                .setMessage("已从当前页面控件及其浅层数据模型重新提取。可复制全部内容，或在单个控件详情中复制指定卡片。")
-                .setPositiveButton("复制全部") { _, _ -> copyText(activity, "Ark 卡片 JSON", combined) }
-                .setNeutralButton("查看 JSON") { _, _ ->
+                .setTitle("已拉取：图片 ${images.size} · 卡片 ${cards.size}")
+                .setMessage("数据来自当前可见控件和已提取的消息模型缓存；不会读取数据库或抓取网络包。")
+                .setPositiveButton("复制全部") { _, _ -> copyText(activity, "图片与卡片数据", combined) }
+                .setNeutralButton("查看 / 复制卡片") { _, _ ->
                     val view = TextView(activity).apply {
                         text = combined; textSize = 12f; setTextColor(0xFF172B43.toInt())
                         setTextIsSelectable(true)
@@ -1103,8 +1246,9 @@ private class InspectorOverlay private constructor(
                     val scroll = android.widget.ScrollView(activity).apply {
                         addView(view, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
                     }
-                    AlertDialog.Builder(activity).setTitle("Ark 卡片 JSON").setView(scroll)
-                        .setPositiveButton("复制") { _, _ -> copyText(activity, "Ark 卡片 JSON", combined) }
+                    AlertDialog.Builder(activity).setTitle("图片直链与 Ark JSON").setView(scroll)
+                        .setPositiveButton("复制全部图片") { _, _ -> copyText(activity, "图片直链", images.joinToString("\n")) }
+                        .setNeutralButton("复制全部卡片") { _, _ -> copyText(activity, "Ark 卡片 JSON", cards.joinToString("\n\n")) }
                         .setNegativeButton("关闭", null).show()
                 }
                 .setNegativeButton("关闭", null)
@@ -1126,51 +1270,148 @@ private class InspectorOverlay private constructor(
         showInspectorToast("已保存 ${discovered.size} 个页面链接，历史共 ${total} 条")
     }
 
-    private fun showLinkHistory() {
-        val rows = QQInspectorLinks.readAll()
-        if (rows.isEmpty()) {
-            AlertDialog.Builder(activity)
-                .setTitle("QQ 链接记录")
-                .setMessage("暂无记录。开启探测器后浏览 QQ 页面，链接会自动保存；也可手动保存当前页面全部链接。")
-                .setPositiveButton("知道了", null)
-                .show()
-            return
-        }
-        val labels = rows.asReversed().mapIndexed { index, row ->
-            val date = SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault()).format(Date(row.optLong("time")))
-            "$date · ${row.optString("kind")} · ${row.optString("source")}\n${row.optString("url")}"
-        }.toTypedArray()
+    /** 链接记录按图片直链 / 卡片 JSON / 跳转链接分类，同一内容合并显示捕获次数。 */
+    private fun showLinkHistory() = showLinkCategories(QQInspectorLinks.readAll())
+
+    private fun linkCategory(kind: String): String = when {
+        QQInspectorLinks.isImageKind(kind) -> "图片直链"
+        QQInspectorLinks.isCardJsonKind(kind) -> "卡片 JSON"
+        else -> "跳转链接"
+    }
+
+    private fun showLinkCategories(rows: List<JSONObject>) {
+        val categories = listOf("图片直链", "卡片 JSON", "跳转链接")
+        val labels = categories.map { category ->
+            val count = rows.count { linkCategory(it.optString("kind")) == category }
+            "$category（$count 条记录）"
+        }.toMutableList()
+        labels.add("导出全部记录为 JSON")
+        labels.add("清空全部链接记录（${rows.size}）")
         AlertDialog.Builder(activity)
-            .setTitle("链接历史（${rows.size}/100）")
-            .setItems(labels) { _, which ->
-                val row = rows.asReversed().getOrNull(which) ?: return@setItems
-                val url = row.optString("url")
-                AlertDialog.Builder(activity)
-                    .setTitle("链接详情")
-                    .setMessage("触发位置：${row.optString("source")}\n类型：${row.optString("kind")}\n\n$url")
-                    .setPositiveButton("复制") { _, _ -> copyText(activity, "QQ链接", url) }
-                    .setNeutralButton("跳转") { _, _ -> confirmHistoryOpen(url) }
-                    .setNegativeButton("关闭", null)
-                    .show()
-            }
-            .setNeutralButton("清空全部") { _, _ ->
-                QQInspectorLinks.clear()
-                showInspectorToast("链接记录已清空")
+            .setTitle("链接记录分类 · ${rows.size}")
+            .setItems(labels.toTypedArray()) { _, which ->
+                when (which) {
+                    0, 1, 2 -> showGroupedLinks(rows.filter { linkCategory(it.optString("kind")) == categories[which] }, categories[which])
+                    3 -> copyText(activity, "QQ链接记录", QQInspectorLinks.exportJson())
+                    4 -> {
+                        AlertDialog.Builder(activity).setTitle("清空链接记录？")
+                            .setMessage("此操作只清除 TNT 本地保存的记录，不影响 QQ 聊天内容。")
+                            .setPositiveButton("清空") { _, _ -> QQInspectorLinks.clear(); showInspectorToast("链接记录已清空") }
+                            .setNegativeButton("取消", null).show()
+                    }
+                }
             }
             .setNegativeButton("关闭", null)
             .show()
     }
 
+    private fun showGroupedLinks(rows: List<JSONObject>, category: String) {
+        if (rows.isEmpty()) {
+            showInspectorToast("该分类暂无记录")
+            return
+        }
+        val groups = rows.groupBy { it.optString("url") }
+            .filterKeys { it.isNotBlank() }
+            .entries.sortedByDescending { entry -> entry.value.maxOfOrNull { it.optLong("time") } ?: 0L }
+        val format = SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault())
+        val labels = groups.map { (url, events) ->
+            val latest = events.maxByOrNull { it.optLong("time") }
+            val display = latest?.optString("display", url).orEmpty().replace('\n', ' ')
+            "${events.size} 次捕获 · ${display.take(150)}\n最近：${format.format(Date(latest?.optLong("time") ?: 0L))}"
+        }.toTypedArray()
+        AlertDialog.Builder(activity)
+            .setTitle("$category · ${groups.size} 个不同内容")
+            .setItems(labels) { _, which ->
+                groups.getOrNull(which)?.let { (url, events) -> showLinkCaptureEvents(category, url, events) }
+            }
+            .setPositiveButton("导出本分类") { _, _ ->
+                copyText(activity, category, JSONArray().apply { rows.forEach { put(JSONObject(it.toString())) } }.toString(2))
+            }
+            .setNegativeButton("返回") { _, _ -> showLinkCategories(QQInspectorLinks.readAll()) }
+            .show()
+    }
+
+    private fun showLinkCaptureEvents(category: String, url: String, events: List<JSONObject>) {
+        val sorted = events.sortedByDescending { it.optLong("time") }
+        val format = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+        val labels = sorted.map { row ->
+            val time = format.format(Date(row.optLong("time")))
+            val source = row.optString("source", "未知来源")
+            val parent = row.optString("parentUrl")
+            "$time\n来源：$source" + if (parent.isNotBlank()) "\n上级：${QQInspectorLinks.mask(parent).take(120)}" else ""
+        }.toTypedArray()
+        AlertDialog.Builder(activity)
+            .setTitle("$category · ${sorted.size} 次捕获")
+            .setItems(labels) { _, which -> sorted.getOrNull(which)?.let { showLinkCaptureDetail(category, url, it) } }
+            .setPositiveButton("复制完整内容") { _, _ -> copyText(activity, category, url) }
+            .setNeutralButton("返回") { _, _ -> showGroupedLinks(QQInspectorLinks.readAll().filter { linkCategory(it.optString("kind")) == category }, category) }
+            .setNegativeButton("关闭", null)
+            .show()
+    }
+
+    private fun showLinkCaptureDetail(category: String, url: String, row: JSONObject) {
+        val parent = row.optString("parentUrl")
+        val display = row.optString("display", url)
+        val time = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(row.optLong("time")))
+        val message = buildString {
+            append("分类：").append(category)
+            append("\n捕获时间：").append(time)
+            append("\n捕获来源：").append(row.optString("source"))
+            append("\n\n链接内容：\n").append(display)
+            if (parent.isNotBlank()) append("\n\n上级页面链接：\n").append(QQInspectorLinks.mask(parent))
+            if (display != url) append("\n\n签名参数已在界面中打码；复制时使用完整值。")
+        }
+        val builder = AlertDialog.Builder(activity).setTitle("捕获详情").setMessage(message)
+            .setPositiveButton("复制完整内容") { _, _ -> copyText(activity, category, url) }
+            .setNegativeButton("跳转") { _, _ ->
+                if (QQInspectorLinks.isImageKind(row.optString("kind"))) openHistoryUrl(url, preferQQ = false)
+                else confirmHistoryOpen(url)
+            }
+        if (parent.isNotBlank()) {
+            builder.setNeutralButton("查看上级链接") { _, _ -> showParentLink(parent) }
+        }
+        builder.show()
+    }
+
+    private fun showParentLink(parentUrl: String) {
+        AlertDialog.Builder(activity)
+            .setTitle("上级页面链接")
+            .setMessage(QQInspectorLinks.mask(parentUrl) + "\n\n此链接是在捕获目标跳转时记录的来源页面。")
+            .setPositiveButton("复制上级链接") { _, _ -> copyText(activity, "上级页面链接", parentUrl) }
+            .setNeutralButton("优先在 QQ 中打开") { _, _ -> openHistoryUrl(parentUrl, preferQQ = true) }
+            .setNegativeButton("关闭", null)
+            .show()
+    }
+
+    private fun showLinkRow(row: JSONObject?) {
+        if (row == null) return
+        showLinkCaptureDetail(linkCategory(row.optString("kind")), row.optString("url"), row)
+    }
+
     private fun confirmHistoryOpen(url: String) {
         AlertDialog.Builder(activity)
-            .setTitle("确认跳转？")
-            .setMessage("即将打开以下链接：\\n$url\\n\\n请确认链接来源可信。")
-            .setPositiveButton("确认跳转") { _, _ ->
-                runCatching { activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
-                    .onFailure { showInspectorToast("无法打开链接：${it.javaClass.simpleName}") }
-            }
+            .setTitle("确认在 QQ 中打开？")
+            .setMessage("将优先尝试由 QQ / TIM 处理此链接；如果 QQ 没有匹配的页面入口，才回退到系统默认应用。\n\n$url\n\n请确认链接来源可信。")
+            .setPositiveButton("确认跳转") { _, _ -> openHistoryUrl(url, preferQQ = true) }
             .setNegativeButton("取消", null)
             .show()
+    }
+
+    private fun openHistoryUrl(url: String, preferQQ: Boolean) {
+        val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return
+        if (preferQQ) {
+            for (pkg in listOf("com.tencent.mobileqq", "com.tencent.tim")) {
+                val intent = Intent(Intent.ACTION_VIEW, uri).setPackage(pkg).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                try {
+                    activity.startActivity(intent)
+                    return
+                } catch (_: Throwable) {
+                    // Try the other QQ package, then allow Android to resolve normally.
+                }
+            }
+        }
+        runCatching { activity.startActivity(Intent(Intent.ACTION_VIEW, uri)) }
+            .onFailure { showInspectorToast("无法打开链接：${it.javaClass.simpleName}") }
     }
 
     private fun showList() {
@@ -1436,12 +1677,9 @@ private class InspectorOverlay private constructor(
 
     private fun confirmOpenLink(url: String, label: String) {
         AlertDialog.Builder(activity)
-            .setTitle("确认跳转？")
-            .setMessage("$label：\\n$url\\n\\n将交给系统或 QQ 打开此地址，请确认链接来源可信。")
-            .setPositiveButton("确认跳转") { _, _ ->
-                runCatching { activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
-                    .onFailure { showInspectorToast("无法打开链接：${it.javaClass.simpleName}") }
-            }
+            .setTitle(if (label == "图片直链") "打开图片直链？" else "优先在 QQ 中打开？")
+            .setMessage("$label：\n$url\n\n普通跳转会先尝试 QQ / TIM；如果没有匹配的 QQ 页面入口，再交给系统默认应用。")
+            .setPositiveButton("确认跳转") { _, _ -> openHistoryUrl(url, preferQQ = label != "图片直链") }
             .setNegativeButton("取消", null)
             .show()
     }
@@ -1475,7 +1713,7 @@ private class InspectorOverlay private constructor(
     private fun disableFeature() {
         runSafely {
             ConfigManager.getDefaultConfig().edit()
-                .putBoolean(Constants.PrekXXX + "开发者选项/QQ界面控件探测器", false)
+                .putBoolean(Constants.PrekXXX + "黑壳区/控件探测器", false)
                 .apply()
             QQInspectorRuntime.detach(activity)
             showInspectorToast("控件探测器已停用，可在 TNT 设置中重新开启")
@@ -1648,12 +1886,12 @@ private fun dp(context: Context, value: Int): Int =
  * Small local-only URL store and hooks. Query values with credential-like names are redacted.
  * No request headers, body, response body, chat packet, or login key is accessed.
  */
-private object QQInspectorLinks {
-    private const val STORAGE_KEY = "tnt_qq_inspector_links_v3"
-    private const val MAX_ROWS = 100
+internal object QQInspectorLinks {
+    private const val STORAGE_KEY = "tnt_qq_inspector_links_v4"
+    private const val MAX_ROWS = 300
     private val lock = Any()
     private val recent = LinkedHashMap<String, Long>()
-    private const val FEATURE_KEY = "开发者选项/QQ界面控件探测器"
+    private const val FEATURE_KEY = "黑壳区/控件探测器"
 
     private fun enabled(): Boolean = runCatching {
         ConfigManager.getDefaultConfig().getBooleanOrFalse(Constants.PrekXXX + FEATURE_KEY)
@@ -1664,11 +1902,11 @@ private object QQInspectorLinks {
         hookWebViews(classLoader)
     }
 
-    private fun extractIntent(intent: android.content.Intent?, source: String): List<String> {
+    private fun extractIntent(intent: android.content.Intent?, source: String, parentUrl: String? = null): List<String> {
         if (intent == null) return emptyList()
         val found = LinkedHashSet<String>()
         intent.dataString?.let { raw ->
-            add("ACTIVITY_INTENT", raw, source)
+            add("ACTIVITY_INTENT", raw, source, parentUrl = parentUrl)
             sanitize(raw)?.let(found::add)
         }
         val extras = runCatching { intent.extras }.getOrNull()
@@ -1679,7 +1917,7 @@ private object QQInspectorLinks {
                     val value = extras.get(key) as? String ?: return@forEach
                     val candidate = value.trim()
                     if (looksLikeLink(candidate)) {
-                        add("ACTIVITY_EXTRA", candidate, "$source:$key")
+                        add("ACTIVITY_EXTRA", candidate, "$source:$key", parentUrl = parentUrl)
                         sanitize(candidate)?.let(found::add)
                     }
                 }
@@ -1693,6 +1931,7 @@ private object QQInspectorLinks {
         val found = LinkedHashSet<String>()
         found.addAll(extractIntent(activity.intent, activity.javaClass.simpleName))
         val root = runCatching { activity.findViewById<ViewGroup>(android.R.id.content) }.getOrNull()
+        val parentUrl = currentPageUrl(activity)
         var inspected = 0
         fun walk(view: View) {
             if (inspected++ > 360) return
@@ -1714,6 +1953,16 @@ private object QQInspectorLinks {
                     }
                 }
             }
+            if (view is TextView && view !is EditText) {
+                val content = runCatching { view.text?.toString() }.getOrNull()
+                // 只解析短文本，避免把长聊天记录整段扫一遍
+                if (!content.isNullOrBlank() && content.length in 8..4000) {
+                    extractUrls(content).take(10).forEach { url ->
+                        add("VIEW_TEXT", url, activity.javaClass.simpleName + "/" + className, parentUrl = parentUrl)
+                        sanitize(url)?.let(found::add)
+                    }
+                }
+            }
             if (view is ViewGroup) {
                 for (i in 0 until view.childCount) walk(view.getChildAt(i))
             }
@@ -1724,14 +1973,34 @@ private object QQInspectorLinks {
 
     private fun looksLikeLink(raw: String): Boolean {
         val scheme = runCatching { Uri.parse(raw).scheme?.lowercase(Locale.ROOT) }.getOrNull()
-        return scheme in setOf("http", "https", "mqq", "mqqapi", "qq", "tencent")
+        return scheme in setOf("http", "https", "mqq", "mqqapi", "mqqwpa", "qqdocurl", "qq", "tencent")
     }
+
+    private fun currentPageUrl(activity: Activity): String? = runCatching {
+        val root = activity.findViewById<ViewGroup>(android.R.id.content) ?: return@runCatching activity.intent?.dataString
+        var found: String? = null
+        var scanned = 0
+        fun walk(view: View) {
+            if (found != null || scanned++ > 360) return
+            val className = view.javaClass.name
+            if (view is WebView || className.contains("webview", true) || className.contains("x5", true)) {
+                found = runCatching {
+                    view.javaClass.methods.firstOrNull { it.name == "getUrl" && it.parameterTypes.isEmpty() }
+                        ?.invoke(view)?.toString()
+                }.getOrNull()
+            }
+            if (found == null && view is ViewGroup) for (i in 0 until view.childCount) walk(view.getChildAt(i))
+        }
+        walk(root)
+        found?.takeIf { sanitize(it) != null } ?: activity.intent?.dataString?.takeIf { sanitize(it) != null }
+    }.getOrNull()
 
     private fun hookActivityNavigation() {
         val callback = object : XC_MethodHook() {
             override fun beforeHookedMethod(param: MethodHookParam) {
                 val intent = param.args.firstOrNull { it is android.content.Intent } as? android.content.Intent ?: return
-                extractIntent(intent, "Activity.startActivity")
+                val activity = param.thisObject as? Activity
+                extractIntent(intent, "Activity.${param.method.name}", activity?.let(::currentPageUrl))
             }
         }
         runCatching {
@@ -1755,7 +2024,11 @@ private object QQInspectorLinks {
                     XposedBridge.hookAllMethods(clazz, methodName, object : XC_MethodHook() {
                         override fun beforeHookedMethod(param: MethodHookParam) {
                             val raw = param.args.firstOrNull() as? String ?: return
-                            add("WEBVIEW", raw, "${clazz.simpleName}.$methodName")
+                            val parent = runCatching {
+                                param.thisObject.javaClass.methods.firstOrNull { it.name == "getUrl" && it.parameterTypes.isEmpty() }
+                                    ?.invoke(param.thisObject)?.toString()
+                            }.getOrNull()
+                            add("WEBVIEW", raw, "${clazz.simpleName}.$methodName", parentUrl = parent)
                         }
                     })
                 }
@@ -1774,7 +2047,12 @@ private object QQInspectorLinks {
                                     candidate.javaClass.getMethod("getUrl").invoke(candidate)?.toString()
                                 }.getOrNull()
                             } ?: return
-                            add("WEBVIEW_NAV", raw, "${clazz.simpleName}.$methodName")
+                            val parent = runCatching {
+                                val webView = param.args.firstOrNull() ?: return@runCatching null
+                                webView.javaClass.methods.firstOrNull { it.name == "getUrl" && it.parameterTypes.isEmpty() }
+                                    ?.invoke(webView)?.toString()
+                            }.getOrNull()
+                            add("WEBVIEW_NAV", raw, "${clazz.simpleName}.$methodName", parentUrl = parent)
                         }
                     })
                 }
@@ -1782,12 +2060,36 @@ private object QQInspectorLinks {
         }
     }
 
+    private val RKEY_VALUE = Regex("(rkey=)[A-Za-z0-9\\-_=+/%]{6,}", RegexOption.IGNORE_CASE)
+    private val SECRET_VALUE = Regex("((?:token|cookie|auth|ticket|sign|skey|p_skey|pskey|session|password)=)[A-Za-z0-9\\-_=+/%]{6,}", RegexOption.IGNORE_CASE)
+    private val PLAIN_URL = Regex(
+        "(?i)(?:https?|mqqapi|mqqwpa|qqdocurl)://[A-Za-z0-9\\-._~:/?#\\[\\]@!&'()*+,;=%]+",
+        RegexOption.IGNORE_CASE
+    )
+
+    /** 界面上展示用的脱敏文本：直链保留可读部分，签名值打码 */
+    fun mask(raw: String): String = runCatching {
+        raw.replace(RKEY_VALUE) { it.groupValues[1] + "***" }
+            .replace(SECRET_VALUE) { it.groupValues[1] + "***" }
+            .take(8192)
+    }.getOrDefault(raw.take(2048))
+
+    /** 从一段正文/JSON 里提取所有链接 */
+    fun extractUrls(raw: String): List<String> {
+        if (raw.isBlank()) return emptyList()
+        return PLAIN_URL.findAll(raw.take(200_000))
+            .map { it.value.trimEnd('.', ',', ';', ')', ']', '\'', '"', '。', '，', '）') }
+            .filter { it.length in 10..4096 }
+            .take(64)
+            .toList()
+    }
+
     fun sanitize(raw: String): String? {
         return runCatching {
             val trimmed = raw.trim().take(4096)
             val uri = Uri.parse(trimmed)
             val scheme = uri.scheme?.lowercase(Locale.ROOT) ?: return null
-            if (scheme !in setOf("http", "https", "mqq", "mqqapi", "qq", "tencent")) return null
+            if (scheme !in setOf("http", "https", "mqq", "mqqapi", "mqqwpa", "qqdocurl", "qq", "tencent")) return null
             val builder = uri.buildUpon().clearQuery().fragment(null)
             val sensitive = Regex("(token|cookie|auth|ticket|secret|sign|signature|skey|p_skey|pskey|uin|session|password|passwd|access.?key|refresh)", RegexOption.IGNORE_CASE)
             uri.queryParameterNames.take(32).forEach { key ->
@@ -1799,36 +2101,112 @@ private object QQInspectorLinks {
         }.getOrNull()
     }
 
-    fun add(kind: String, raw: String, source: String) {
-        if (!enabled()) return
-        val safe = sanitize(raw) ?: return
-        val fingerprint = "$kind|$safe"
+    /**
+     * @param full true 表示保留完整 URL（图片直链必须带 rkey 才能访问），false 时按规则脱敏
+     * @param force true 时不受「控件探测器」总开关限制（消息提取功能自己写入时使用）
+     */
+    data class LinkEntry(
+        val kind: String,
+        val raw: String,
+        val source: String,
+        val full: Boolean = false,
+        val parentUrl: String? = null
+    )
+
+    fun add(kind: String, raw: String, source: String, full: Boolean = false, force: Boolean = false, parentUrl: String? = null) {
+        addBatch(listOf(LinkEntry(kind, raw, source, full, parentUrl)), force)
+    }
+
+    /**
+     * 批量写入：一次「读-改-写」，避免一条消息里 9 张图触发 9 次全量序列化。
+     */
+    fun addBatch(entries: List<LinkEntry>, force: Boolean = false) {
+        if (entries.isEmpty()) return
+        if (!force && !enabled()) return
+        val now = System.currentTimeMillis()
+        val prepared = ArrayList<Array<Any>>(entries.size)
+        for (entry in entries) {
+            val cardPayload = isCardPayloadKind(entry.kind)
+            val sanitized = if (cardPayload) validateCardPayload(entry.raw) else sanitize(entry.raw)
+            if (sanitized == null) continue
+            val value = if (entry.full || cardPayload) entry.raw.trim().take(if (cardPayload) 128_000 else 8192) else sanitized
+            if (value.isBlank()) continue
+            val parent = entry.parentUrl?.let(::sanitize).orEmpty()
+            prepared.add(arrayOf(entry, value, if (cardPayload) mask(value).take(2400) else mask(value), parent))
+        }
+        if (prepared.isEmpty()) return
         synchronized(lock) {
-            val now = System.currentTimeMillis()
-            val previous = recent[fingerprint]
-            if (previous != null && now - previous < 900L) return
-            recent[fingerprint] = now
+            val fresh = ArrayList<Array<Any>>(prepared.size)
+            for (item in prepared) {
+                val entry = item[0] as LinkEntry
+                val value = item[1] as String
+                val fingerprint = entry.kind + "|" + value
+                val previous = recent[fingerprint]
+                if (previous != null && now - previous < 900L) continue
+                recent[fingerprint] = now
+                fresh.add(item)
+            }
             while (recent.size > 240) recent.remove(recent.keys.first())
-            runCatching {
-                val config = ConfigManager.getDefaultConfig()
-                val legacy = ConfigManager.cGetString("tnt_qq_inspector_links_v2", "[]")
-                val old = JSONArray(config.getStringOrDefault(STORAGE_KEY, legacy))
-                val next = JSONArray()
-                val first = (old.length() - (MAX_ROWS - 1)).coerceAtLeast(0)
-                for (index in first until old.length()) old.optJSONObject(index)?.let { next.put(it) }
-                next.put(
-                    JSONObject()
-                        .put("time", now)
-                        .put("kind", kind.take(32))
-                        .put("source", source.take(100))
-                        .put("url", safe)
-                )
-                config.edit().putString(STORAGE_KEY, next.toString()).apply()
-            }.onFailure {
+            if (fresh.isEmpty()) return
+            runCatching { persist(fresh, now) }.onFailure {
                 Logger.w("TNT link history write failed: " + it.javaClass.simpleName)
             }
         }
     }
+
+    private fun persist(fresh: List<Array<Any>>, now: Long) {
+        val config = ConfigManager.getDefaultConfig()
+        val legacy = ConfigManager.cGetString("tnt_qq_inspector_links_v2", "[]")
+        val old = JSONArray(config.getStringOrDefault(STORAGE_KEY, legacy))
+        val next = JSONArray()
+        val keep = (MAX_ROWS - fresh.size).coerceAtLeast(0)
+        val first = (old.length() - keep).coerceAtLeast(0)
+        for (index in first until old.length()) old.optJSONObject(index)?.let { next.put(it) }
+        for (item in fresh) {
+            val entry = item[0] as LinkEntry
+            next.put(
+                JSONObject()
+                    .put("time", now)
+                    .put("kind", entry.kind.take(32))
+                    .put("source", entry.source.take(100))
+                    .put("url", item[1] as String)
+                    .put("display", item[2] as String)
+                    .put("parentUrl", item[3] as String)
+            )
+        }
+        config.edit().putString(STORAGE_KEY, next.toString()).apply()
+    }
+
+    fun isImageKind(kind: String): Boolean =
+        kind.contains("IMAGE", ignoreCase = true) || kind.contains("PIC", ignoreCase = true)
+
+    fun isCardJsonKind(kind: String): Boolean =
+        kind.contains("ARK", ignoreCase = true) || kind.contains("CARD_JSON", ignoreCase = true) || kind.contains("STRUCT", ignoreCase = true)
+
+    private fun isCardPayloadKind(kind: String): Boolean = isCardJsonKind(kind)
+
+    private fun validateCardPayload(raw: String): String? {
+        val value = raw.trim()
+        if (value.length !in 8..128_000) return null
+        val looksStructured = value.startsWith("{") || value.startsWith("[") || value.startsWith("<")
+        return value.takeIf { looksStructured }
+    }
+
+    /** 导出全部记录（含完整链接），便于把直链/卡片带走 */
+    fun exportJson(): String = runCatching {
+        val array = JSONArray()
+        readAll().forEach { row ->
+            array.put(
+                JSONObject()
+                    .put("time", row.optLong("time"))
+                    .put("kind", row.optString("kind"))
+                    .put("source", row.optString("source"))
+                    .put("url", row.optString("url"))
+                    .put("parentUrl", row.optString("parentUrl"))
+            )
+        }
+        array.toString(2)
+    }.getOrDefault("[]")
 
     fun readAll(): List<JSONObject> = runCatching {
         val config = ConfigManager.getDefaultConfig()
