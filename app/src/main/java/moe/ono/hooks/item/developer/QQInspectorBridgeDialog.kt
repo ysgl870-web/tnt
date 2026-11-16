@@ -181,7 +181,7 @@ internal object QQInspectorBridgeDialog {
                 detail.appendLine("转换方式：封装为 Android intent://，保留原始网页地址")
                 detail.appendLine("注意：这不是伪造的 QQ 私有 mqqapi Scheme。")
             }
-            scheme in setOf("mqqapi", "mqq", "tim", "qq", "qqdocurl") -> {
+            scheme != null && scheme in setOf("mqqapi", "mqq", "tim", "qq", "qqdocurl") -> {
                 detail.appendLine("\n识别类型：QQ / TIM Scheme")
                 if (scheme == "mqqapi") {
                     val parsed = runCatching { MqqApiUrlTool.parse(target) }.getOrNull()
