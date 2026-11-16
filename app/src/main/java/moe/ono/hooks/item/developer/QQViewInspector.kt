@@ -1,6 +1,7 @@
 package moe.ono.hooks.item.developer
 
 import android.app.Activity
+import android.animation.ValueAnimator
 import android.app.AlertDialog
 import android.app.Application
 import android.content.ClipData
@@ -21,6 +22,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.animation.TimeInterpolator
 import android.webkit.WebView
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -938,6 +940,94 @@ private class InspectorEntryView(
     }
 }
 
+/**
+ * Small native morphing menu icon inspired by Morphicons.
+ *
+ * The three stroke paths morph between a hamburger and an X. A damped spring
+ * interpolator gives the transition a soft settle without a JS/RN runtime or
+ * per-frame object allocation.
+ */
+private class MorphMenuHandleView(
+    context: Context,
+    private val onOpen: () -> Unit
+) : View(context) {
+    private val density = resources.displayMetrics.density
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFFFFFFFF.toInt()
+        style = Paint.Style.STROKE
+        strokeWidth = 2.6f * density
+        strokeCap = Paint.Cap.ROUND
+    }
+    private var morph = 0f
+    private var animator: ValueAnimator? = null
+    private val spring = TimeInterpolator { input ->
+        val t = input.coerceIn(0f, 1f)
+        (1f - kotlin.math.exp((-7.5f * t).toDouble()).toFloat() *
+            kotlin.math.cos(10.5f * t)).coerceIn(0f, 1.08f)
+    }
+
+    init {
+        isClickable = true
+        isFocusable = true
+        contentDescription = "展开 TNT 控件工具面板"
+        background = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = 14f * density
+            setColor(0xF0182740.toInt())
+            setStroke((1f * density).toInt().coerceAtLeast(1), 0x9958BDEB.toInt())
+        }
+        elevation = 16f * density
+        setOnClickListener { onOpen() }
+    }
+
+    fun animateTo(open: Boolean, onEnd: (() -> Unit)? = null) {
+        animator?.cancel()
+        val target = if (open) 1f else 0f
+        animator = ValueAnimator.ofFloat(morph, target).apply {
+            duration = 310L
+            interpolator = spring
+            addUpdateListener {
+                morph = (it.animatedValue as Float).coerceIn(0f, 1.08f)
+                invalidate()
+            }
+            if (onEnd != null) addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    onEnd()
+                }
+            })
+            start()
+        }
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val cx = width * 0.5f
+        val cy = height * 0.42f
+        val half = 12f * density
+        val spread = 8f * density
+        val p = morph.coerceIn(0f, 1f)
+        fun lerp(a: Float, b: Float) = a + (b - a) * p
+
+        // Top and bottom bars rotate toward the two diagonals; the center bar
+        // contracts and fades, mirroring the path correspondence idea.
+        paint.alpha = 255
+        canvas.drawLine(cx - half, lerp(cy - spread, cy - half), cx + half,
+            lerp(cy - spread, cy + half), paint)
+        canvas.drawLine(cx - half, lerp(cy + spread, cy + half), cx + half,
+            lerp(cy + spread, cy - half), paint)
+        paint.alpha = ((1f - p) * 255f).toInt().coerceIn(0, 255)
+        val middleHalf = half * (1f - p)
+        canvas.drawLine(cx - middleHalf, cy, cx + middleHalf, cy, paint)
+        paint.alpha = 255
+        paint.style = Paint.Style.FILL
+        paint.textAlign = Paint.Align.CENTER
+        paint.typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.BOLD)
+        paint.textSize = 9f * density
+        canvas.drawText("TNT", cx, height * 0.82f, paint)
+        paint.style = Paint.Style.STROKE
+    }
+}
+
 private class InspectorOverlay private constructor(
     private val activity: Activity,
     private val root: ViewGroup,
@@ -961,22 +1051,7 @@ private class InspectorOverlay private constructor(
         overScrollMode = View.OVER_SCROLL_NEVER
         addView(toolbar, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
     }
-    private val panelHandle = TextView(activity).apply {
-        text = "TNT\n工具"
-        textSize = 13f
-        gravity = Gravity.CENTER
-        setTextColor(0xFFFFFFFF.toInt())
-        setPadding(dp(activity, 8), dp(activity, 8), dp(activity, 8), dp(activity, 8))
-        background = GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            cornerRadius = dp(activity, 14).toFloat()
-            setColor(0xF0182740.toInt())
-            setStroke(dp(activity, 1), 0x9958BDEB.toInt())
-        }
-        elevation = dp(activity, 16).toFloat()
-        isClickable = true
-        setOnClickListener { setPanelExpanded(true) }
-    }
+    private val panelHandle = MorphMenuHandleView(activity) { setPanelExpanded(true) }
     private var panelExpanded = true
     private var bordersVisible = true
     private var pickMode = false
@@ -1022,9 +1097,19 @@ private class InspectorOverlay private constructor(
     }
 
     private fun setPanelExpanded(expanded: Boolean) {
+        if (panelExpanded == expanded) return
         panelExpanded = expanded
-        toolbarScroll.visibility = if (expanded) View.VISIBLE else View.GONE
-        panelHandle.visibility = if (expanded) View.GONE else View.VISIBLE
+        if (expanded) {
+            panelHandle.visibility = View.VISIBLE
+            panelHandle.animateTo(true) {
+                toolbarScroll.visibility = View.VISIBLE
+                panelHandle.visibility = View.GONE
+            }
+        } else {
+            toolbarScroll.visibility = View.GONE
+            panelHandle.visibility = View.VISIBLE
+            panelHandle.animateTo(false)
+        }
     }
 
     private fun buildToolbar() {
