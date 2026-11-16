@@ -1,0 +1,71 @@
+name: Merge uploaded TNT source into main
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/merge-uploaded-source.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  merge-and-build:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main with submodules
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Verify and apply uploaded source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .github/tnt-merge-patch/{00,01,02,03,04,05}.b64 > /tmp/tnt-source.patch.gz.b64
+          echo "3ab7f3ecb2646297edf22a26945adfac53b17a1d5fec6797db3035d6d375b0fd  /tmp/tnt-source.patch.gz.b64" | sha256sum -c -
+          base64 --decode /tmp/tnt-source.patch.gz.b64 | gzip -dc > /tmp/tnt-source.patch
+          test "$(wc -c < /tmp/tnt-source.patch)" -eq 111209
+          git apply --check /tmp/tnt-source.patch
+          git apply /tmp/tnt-source.patch
+          git diff --check
+          chmod +x gradlew
+
+      - name: Build release before committing
+        run: ./gradlew assembleRelease --warning-mode all --stacktrace
+
+      - name: Upload verified APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: tnt-black-shell-release-candidate
+          path: app/build/outputs/apk/release/**/*.apk
+          if-no-files-found: error
+
+      - name: Remove archive and temporary patch data, then push merged source
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm -f tnt-optimized-src.zip
+          rm -rf .github/tnt-merge-patch
+          git rm -f .github/workflows/merge-uploaded-source.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Merge latest TNT source and add Black Shell inspector"
+          git push origin HEAD:main
+          gh workflow run push_ci.yml --ref main
