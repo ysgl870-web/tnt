@@ -47,7 +47,7 @@ jobs:
 
       - name: Decode and validate release keystore (main)
         id: keystore
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
         shell: bash
         env:
           KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
@@ -82,7 +82,7 @@ jobs:
         run: ./gradlew assembleRelease --warning-mode all --stacktrace
 
       - name: Build signed Release for main
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.keystore.outputs.valid == 'true'
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && steps.keystore.outputs.valid == 'true'
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
@@ -95,7 +95,7 @@ jobs:
             --warning-mode all --stacktrace
 
       - name: Build Release with debug signing fallback (main)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.keystore.outputs.valid != 'true'
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && steps.keystore.outputs.valid != 'true'
         run: |
           echo "::warning::Building a test Release variant signed with the Android debug key."
           ./gradlew assembleRelease --warning-mode all --stacktrace
@@ -109,7 +109,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload Release APK (main)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
           name: ono-release-apk
