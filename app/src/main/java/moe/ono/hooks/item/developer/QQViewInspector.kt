@@ -497,14 +497,12 @@ private object InspectorTree {
             accept(drawable?.toString(), "drawable")
             inspectUrlModel(drawable, "drawable", ::accept)
             if (drawable != null) {
-                drawable.javaClass.methods.filter { it.parameterTypes.isEmpty() &&
-                    Regex("(uri|url|source|path)", RegexOption.IGNORE_CASE).containsMatchIn(it.name) }
+                InspectorReflectionCache.methods(drawable.javaClass, "(uri|url|source|path)")
                     .take(12).forEach { method -> runCatching { accept(method.invoke(drawable), "drawable.${method.name}") } }
                 var drawableType: Class<*>? = drawable.javaClass
                 var depth = 0
                 while (drawableType != null && drawableType != Any::class.java && depth++ < 3) {
-                    drawableType.declaredFields.take(40).forEach { field ->
-                        if (Regex("(uri|url|source|path|image)", RegexOption.IGNORE_CASE).containsMatchIn(field.name))
+                    InspectorReflectionCache.fields(drawableType, "(uri|url|source|path|image)").take(40).forEach { field ->
                             runCatching { field.isAccessible = true; accept(field.get(drawable), "drawable.${field.name}") }
                     }
                     drawableType = drawableType.superclass
@@ -517,19 +515,16 @@ private object InspectorTree {
         var type: Class<*>? = view.javaClass
         var inspected = 0
         while (type != null && type != View::class.java && inspected < 4) {
-            type.declaredFields.take(80).forEach { field ->
+            InspectorReflectionCache.fields(type, "(url|uri|image|img|pic|photo|origin|source|thumb|path|model|data)").take(80).forEach { field ->
                 val name = field.name
-                if (!Regex("(url|uri|image|img|pic|photo|origin|source|thumb|path|model|data)", RegexOption.IGNORE_CASE)
-                        .containsMatchIn(name)) return@forEach
                 runCatching {
                     field.isAccessible = true
                     val value = field.get(view)
                     accept(value, name)
                     if (value != null && value !is String && value !is Number && value !is Boolean) {
-                        value.javaClass.methods.filter { it.parameterTypes.isEmpty() &&
-                            Regex("(url|uri|image|img|pic|photo|origin|source|thumb|path)", RegexOption.IGNORE_CASE).containsMatchIn(it.name) }
+                        InspectorReflectionCache.methods(value.javaClass, "(url|uri|image|img|pic|photo|origin|source|thumb|path)")
                             .take(16).forEach { getter -> runCatching { accept(getter.invoke(value), "$name.${getter.name}") } }
-                        value.javaClass.declaredFields.filter { Regex("(url|uri|image|img|pic|photo|origin|source|thumb|path)", RegexOption.IGNORE_CASE).containsMatchIn(it.name) }
+                        InspectorReflectionCache.fields(value.javaClass, "(url|uri|image|img|pic|photo|origin|source|thumb|path)")
                             .take(24).forEach { nested -> runCatching { nested.isAccessible = true; accept(nested.get(value), "$name.${nested.name}") } }
                     }
                 }
@@ -543,6 +538,8 @@ private object InspectorTree {
     private fun collectCardJson(view: View): List<String> {
         val className = view.javaClass.name
         val cardLike = InspectorReflectionCache.matches(className, "(ark|card|struct|json|share)")
+        val hasCardFields = InspectorReflectionCache.fields(view.javaClass, "(ark|card|json|payload|extra|meta|struct|share)").isNotEmpty()
+        if (!cardLike && !hasCardFields && view !is TextView && view.tag == null && view.contentDescription == null) return emptyList()
         val found = LinkedHashSet<String>()
         fun accept(value: Any?) {
             val raw = when (value) {
@@ -559,7 +556,7 @@ private object InspectorTree {
                     else -> null
                 }
             }.getOrNull() ?: return
-            if (cardLike || Regex("(ark|app|meta|prompt|view|config|jumpUrl|qqdocurl|schema)", RegexOption.IGNORE_CASE).containsMatchIn(parsed)) found.add(parsed)
+            if (cardLike || InspectorReflectionCache.matches(parsed, "(ark|app|meta|prompt|view|config|jumpUrl|qqdocurl|schema)")) found.add(parsed)
         }
         if (view is TextView && !view.text.isNullOrBlank()) accept(view.text.toString())
         fun inspectCardObject(value: Any?) {
@@ -648,18 +645,18 @@ private object InspectorTree {
         }
         acceptModelLink(view.contentDescription, "contentDescription")
         acceptModelLink(view.tag, "tag")
-        val linkFieldPattern = Regex("(url|uri|link|scheme|jump|target|redirect|deeplink|deep_link)", RegexOption.IGNORE_CASE)
+        val linkFieldPattern = "(url|uri|link|scheme|jump|target|redirect|deeplink|deep_link)"
         var modelType: Class<*>? = view.javaClass
         var modelDepth = 0
         while (modelType != null && modelType != View::class.java && modelDepth++ < 3) {
-            modelType.declaredFields.filter { linkFieldPattern.containsMatchIn(it.name) }
+            InspectorReflectionCache.fields(modelType, linkFieldPattern)
                 .take(32).forEach { field ->
                     runCatching {
                         field.isAccessible = true
                         val value = field.get(view)
                         acceptModelLink(value, field.name)
                         if (value != null && value !is String && value !is Number && value !is Boolean) {
-                            value.javaClass.declaredFields.filter { linkFieldPattern.containsMatchIn(it.name) }
+                            InspectorReflectionCache.fields(value.javaClass, linkFieldPattern)
                                 .take(20).forEach { nested ->
                                     runCatching {
                                         nested.isAccessible = true
