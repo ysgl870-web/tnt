@@ -22,6 +22,8 @@ import moe.ono.reflex.Reflex
 import moe.ono.util.ContextUtils
 import moe.ono.util.CustomMenu
 import moe.ono.util.Logger
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 
 /**
  * 消息信息提取：直接从 QQ 已加载的消息模型里取数据，而不是靠界面上「猜」。
@@ -41,6 +43,14 @@ import moe.ono.util.Logger
 )
 class QQMessageExtractor : BaseSwitchFunctionHookItem(), OnMenuBuilder,
     QQMessageViewListener.OnChatViewUpdateListener {
+
+    // Message view callbacks may arrive during RecyclerView scrolling. Parse MsgRecord and
+    // persist the bounded cache away from the UI thread; pending IDs also prevent duplicate
+    // work when the same recycled bubble reports multiple updates before the first parse ends.
+    private val extractionExecutor = Executors.newSingleThreadExecutor { task ->
+        Thread(task, "TNT-MsgExtract").apply { isDaemon = true }
+    }
+    private val pendingMessageIds = ConcurrentHashMap.newKeySet<Long>()
 
     /** 只在有内容可提取的气泡类型上挂菜单，避免给每个控件都加长按项 */
     override val targetTypes: Array<String> = arrayOf(
@@ -68,10 +78,18 @@ class QQMessageExtractor : BaseSwitchFunctionHookItem(), OnMenuBuilder,
 
     override fun onViewUpdateAfter(msgItemView: View, msgRecord: Any) {
         val record = msgRecord as? MsgRecord ?: return
-        // 列表滚动会反复回调同一个气泡；已经提取过的 msgId 直接跳过，避免重复解析/重复写记录
-        if (QQMsgExtractStore.contains(record.msgId)) return
-        val extracted = QQMsgExtractor.extract(record) ?: return
-        remember(extracted)
+        val msgId = record.msgId
+        if (msgId == 0L || QQMsgExtractStore.contains(msgId) || !pendingMessageIds.add(msgId)) return
+        extractionExecutor.execute {
+            try {
+                val extracted = QQMsgExtractor.extract(record) ?: return@execute
+                remember(extracted)
+            } catch (error: Throwable) {
+                Logger.w("TNT async message extraction failed: " + error.javaClass.simpleName)
+            } finally {
+                pendingMessageIds.remove(msgId)
+            }
+        }
     }
 
     override fun onGetMenu(
