@@ -1223,6 +1223,7 @@ private class InspectorOverlay private constructor(
         toolbar.addView(toolButton("拉取图片 / 卡片数据") { pullCardData() }, buttonParams())
         toolbar.addView(toolButton("保存页面链接") { saveCurrentLinks() }, buttonParams())
         toolbar.addView(toolButton("链接分类记录") { showLinkHistory() }, buttonParams())
+        toolbar.addView(toolButton("Scheme / URL 跳板转换") { QQInspectorBridgeDialog.show(activity) }, buttonParams())
         toolbar.addView(toolButton("复制控件结构") { copyTree() }, buttonParams())
         toolbar.addView(toolButton("停用探测功能") { disableFeature() }, buttonParams())
         toolbar.addView(toolButton("关闭悬浮探测") { close() }, buttonParams())
