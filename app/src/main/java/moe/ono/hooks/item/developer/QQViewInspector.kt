@@ -86,6 +86,64 @@ class QQViewInspector : BaseSwitchFunctionHookItem() {
     }
 }
 
+/** Black-shell floating panel appearance controls, exposed in QQ settings. */
+@HookItem(
+    path = "黑壳区/悬浮窗外观",
+    description = "设置悬浮工具面板透明度与背景颜色；面板标题栏可拖动，右下角可调整大小。"
+)
+class QQInspectorPanelAppearance : BaseClickableFunctionHookItem() {
+    override fun entry(classLoader: ClassLoader) = Unit
+    override fun onClick(context: Context) = QQInspectorAppearanceDialog.show(context)
+}
+
+private object QQInspectorAppearanceDialog {
+    private const val ALPHA_KEY = "tnt_qq_inspector_panel_alpha"
+    private const val COLOR_KEY = "tnt_qq_inspector_panel_color"
+    private val palette = listOf(
+        "深海蓝" to 0x182740, "曜石黑" to 0x1B1D22,
+        "星空紫" to 0x251D3A, "翡翠绿" to 0x15302B, "雾面白" to 0xF4F7FB
+    )
+    fun show(context: Context) {
+        val cfg = ConfigManager.getDefaultConfig()
+        val alpha = cfg.getInt(ALPHA_KEY, 94).coerceIn(35, 100)
+        var color = cfg.getInt(COLOR_KEY, 0x182740)
+        val content = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(context, 20), dp(context, 12), dp(context, 20), dp(context, 8))
+        }
+        val label = TextView(context).apply { text = "透明度：$alpha%"; textSize = 14f }
+        content.addView(label)
+        val seek = android.widget.SeekBar(context).apply { max = 65; progress = alpha - 35 }
+        content.addView(seek)
+        content.addView(TextView(context).apply {
+            text = "背景颜色"; textSize = 14f
+            setPadding(0, dp(context, 10), 0, dp(context, 6))
+        })
+        palette.forEach { (name, value) ->
+            content.addView(TextView(context).apply {
+                text = "●  $name"; textSize = 14f
+                setTextColor(0xFF000000.toInt() or value)
+                setPadding(dp(context, 8), dp(context, 7), dp(context, 8), dp(context, 7))
+                setOnClickListener { color = value; label.text = "透明度：${seek.progress + 35}% · 已选$name" }
+            })
+        }
+        seek.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(bar: android.widget.SeekBar?, progress: Int, fromUser: Boolean) {
+                label.text = "透明度：${progress + 35}%"
+            }
+            override fun onStartTrackingTouch(bar: android.widget.SeekBar?) = Unit
+            override fun onStopTrackingTouch(bar: android.widget.SeekBar?) = Unit
+        })
+        AlertDialog.Builder(context).setTitle("黑壳区 · 悬浮窗外观")
+            .setMessage("拖动面板标题栏可移动位置，拖动面板底部的调整区域可改变大小。")
+            .setView(content)
+            .setPositiveButton("保存") { _, _ ->
+                cfg.edit().putInt(ALPHA_KEY, seek.progress + 35).putInt(COLOR_KEY, color).apply()
+                Toast.makeText(context, "设置已保存，重新打开悬浮面板后生效", Toast.LENGTH_SHORT).show()
+            }.setNegativeButton("取消", null).show()
+    }
+}
+
 /**
  * A one-shot history viewer. Link capture is activated with 黑壳区控件探测器.
  */
@@ -1043,7 +1101,10 @@ private class InspectorOverlay private constructor(
         background = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = dp(activity, 16).toFloat()
-            setColor(0xF0182740.toInt())
+            val cfg = ConfigManager.getDefaultConfig()
+            val alpha = cfg.getInt("tnt_qq_inspector_panel_alpha", 94).coerceIn(35, 100)
+            val rgb = cfg.getInt("tnt_qq_inspector_panel_color", 0x182740) and 0x00FFFFFF
+            setColor(((alpha * 255 / 100) shl 24) or rgb)
             setStroke(dp(activity, 1), 0x9958BDEB.toInt())
         }
         elevation = dp(activity, 16).toFloat()
@@ -1055,6 +1116,12 @@ private class InspectorOverlay private constructor(
     }
     private val panelHandle = MorphMenuHandleView(activity) { setPanelExpanded(true) }
     private var panelExpanded = true
+    private var panelDragX = 0f
+    private var panelDragY = 0f
+    private var panelStartX = 0f
+    private var panelStartY = 0f
+    private var panelStartWidth = dp(activity, 204)
+    private var panelStartHeight = dp(activity, 360)
     private var bordersVisible = true
     private var pickMode = false
     private var multiSelect = false
@@ -1117,10 +1184,31 @@ private class InspectorOverlay private constructor(
     private fun buildToolbar() {
         toolbar.removeAllViews()
         toolbar.addView(TextView(activity).apply {
-            text = "TNT 控件工具箱"
-            textSize = 14f
+            text = "☰  TNT 控件工具箱  ·  拖动移动"
+            textSize = 13f
             setTextColor(0xFFFFFFFF.toInt())
-            setPadding(dp(activity, 8), dp(activity, 2), dp(activity, 8), dp(activity, 10))
+            setPadding(dp(activity, 8), dp(activity, 8), dp(activity, 8), dp(activity, 12))
+            setOnTouchListener { _, event ->
+                val lp = toolbarScroll.layoutParams as? FrameLayout.LayoutParams ?: return@setOnTouchListener false
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        panelDragX = event.rawX; panelDragY = event.rawY
+                        panelStartX = toolbarScroll.translationX; panelStartY = toolbarScroll.translationY
+                        true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val dx = event.rawX - panelDragX
+                        val dy = event.rawY - panelDragY
+                        val maxX = (root.width - toolbarScroll.width - lp.marginEnd).toFloat().coerceAtLeast(0f)
+                        val maxY = (root.height - toolbarScroll.height).toFloat().coerceAtLeast(0f)
+                        toolbarScroll.translationX = (panelStartX + dx).coerceIn(-maxX, maxX)
+                        toolbarScroll.translationY = (panelStartY + dy).coerceIn(-maxY, maxY)
+                        true
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> true
+                    else -> true
+                }
+            }
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         toolbar.addView(toolButton("收起悬浮面板") { setPanelExpanded(false) }, buttonParams())
         toolbar.addView(toolButton("控件列表 · ${nodes.size}") { showList() }, buttonParams())
@@ -1138,6 +1226,31 @@ private class InspectorOverlay private constructor(
         toolbar.addView(toolButton("复制控件结构") { copyTree() }, buttonParams())
         toolbar.addView(toolButton("停用探测功能") { disableFeature() }, buttonParams())
         toolbar.addView(toolButton("关闭悬浮探测") { close() }, buttonParams())
+        toolbar.addView(TextView(activity).apply {
+            text = "↘  拖动调整面板大小"
+            textSize = 11f
+            gravity = Gravity.CENTER
+            setTextColor(0xFFE6F7FF.toInt())
+            setPadding(dp(activity, 8), dp(activity, 9), dp(activity, 8), dp(activity, 9))
+            setOnTouchListener { _, event ->
+                val lp = toolbarScroll.layoutParams as? FrameLayout.LayoutParams ?: return@setOnTouchListener false
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        panelDragX = event.rawX; panelDragY = event.rawY
+                        panelStartWidth = lp.width; panelStartHeight = lp.height
+                        true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        lp.width = (panelStartWidth + event.rawX - panelDragX).toInt().coerceIn(dp(activity, 168), (root.width * .9f).toInt().coerceAtLeast(dp(activity, 168)))
+                        lp.height = (panelStartHeight + event.rawY - panelDragY).toInt().coerceIn(dp(activity, 180), (root.height * .9f).toInt().coerceAtLeast(dp(activity, 180)))
+                        toolbarScroll.layoutParams = lp
+                        true
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> true
+                    else -> true
+                }
+            }
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(activity, 38)))
     }
 
     private fun buttonParams() = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(activity, 42)).apply {
@@ -1286,6 +1399,7 @@ private class InspectorOverlay private constructor(
             val scanned = InspectorTree.collect(activity)
             nodes = scanned
             boxes.setNodes(nodes)
+            boxes.animateScan()
             val links = (activityLinks + scanned.flatMap { it.directLinks + it.links } +
                 QQMsgExtractStore.allLinks()).distinct()
             val images = (scanned.flatMap { it.imageLinks } + QQMsgExtractStore.allImages()).distinct()
@@ -1881,6 +1995,18 @@ private class InspectorOverlay private constructor(
         private var multiSelect = false
         private val selectedViews = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<View, Boolean>())
         private var onSelectionChanged: ((Set<View>) -> Unit)? = null
+        private val sweepPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private var scanProgress = 0f
+        private var scanAnimator: ValueAnimator? = null
+        fun animateScan() {
+            scanAnimator?.cancel()
+            scanProgress = 0f
+            scanAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+                duration = 1150L
+                addUpdateListener { scanProgress = it.animatedValue as Float; invalidate() }
+                start()
+            }
+        }
         fun setMultiSelect(enabled: Boolean) { multiSelect = enabled; invalidate(); onSelectionChanged?.invoke(selectedViews.toSet()) }
         fun setOnSelectionChanged(listener: (Set<View>) -> Unit) { onSelectionChanged = listener }
         fun setSelectedViews(views: Collection<View>) { selectedViews.clear(); selectedViews.addAll(views); invalidate(); onSelectionChanged?.invoke(selectedViews.toSet()) }
@@ -1912,6 +2038,16 @@ private class InspectorOverlay private constructor(
             getLocationOnScreen(location)
             val screenLeft = location[0]
             val screenTop = location[1]
+            if (scanProgress > 0f && scanProgress <= 1f) {
+                val y = height * scanProgress
+                val band = dp(context, 68).toFloat()
+                sweepPaint.style = Paint.Style.FILL
+                sweepPaint.color = 0x5538D8FF
+                canvas.drawRect(0f, y - band, width.toFloat(), y, sweepPaint)
+                sweepPaint.color = 0xAA9AEAFF.toInt()
+                sweepPaint.strokeWidth = dp(context, 2).toFloat()
+                canvas.drawLine(0f, y, width.toFloat(), y, sweepPaint)
+            }
             drawnNodes.forEachIndexed { index, node ->
                 val rect = RectF(
                     (node.bounds.left - screenLeft).toFloat(),
