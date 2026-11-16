@@ -19,6 +19,7 @@ object QQMsgExtractStore {
 
     /** 本进程已处理过的 msgId：列表滚动会反复回调同一气泡，用它直接短路 */
     private val seen = HashSet<Long>()
+    private var seenLoaded = false
 
     private fun load(): JSONArray = runCatching {
         JSONArray(ConfigManager.getDefaultConfig().getStringOrDefault(KEY, "[]"))
@@ -44,7 +45,21 @@ object QQMsgExtractStore {
         }
     }
 
-    fun contains(msgId: Long): Boolean = synchronized(lock) { seen.contains(msgId) }
+    fun contains(msgId: Long): Boolean = synchronized(lock) {
+        if (!seenLoaded) {
+            // Called by the extraction worker, not the QQ UI callback. Seed the in-memory
+            // index once so process restarts do not re-parse the same recent messages.
+            runCatching {
+                val rows = load()
+                for (index in 0 until rows.length()) {
+                    val id = rows.optJSONObject(index)?.optLong("msgId") ?: 0L
+                    if (id != 0L) seen.add(id)
+                }
+            }
+            seenLoaded = true
+        }
+        seen.contains(msgId)
+    }
 
     fun find(msgId: Long): ExtractedMessage? = recent().firstOrNull { it.msgId == msgId }
 
@@ -65,6 +80,7 @@ object QQMsgExtractStore {
     fun clear() {
         synchronized(lock) {
             seen.clear()
+            seenLoaded = true
             ConfigManager.getDefaultConfig().edit().putString(KEY, "[]").apply()
         }
     }
