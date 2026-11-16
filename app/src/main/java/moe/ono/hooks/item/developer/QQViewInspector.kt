@@ -334,13 +334,43 @@ private fun normalizeImageUrl(raw: String): String? = runCatching {
 
 private fun inspectUrlModel(value: Any?, source: String, accept: (Any?, String) -> Unit) {
     if (value == null || value is String || value is Uri || value is Number || value is Boolean) return
-    value.javaClass.methods.filter { it.parameterTypes.isEmpty() &&
-        Regex("(uri|url|source|path|origin|image)", RegexOption.IGNORE_CASE).containsMatchIn(it.name) }
+    InspectorReflectionCache.methods(value.javaClass, "(uri|url|source|path|origin|image)")
         .take(16).forEach { method -> runCatching { accept(method.invoke(value), "$source.${method.name}") } }
-    value.javaClass.declaredFields.filter {
-        Regex("(uri|url|source|path|origin|image)", RegexOption.IGNORE_CASE).containsMatchIn(it.name)
-    }.take(32).forEach { field ->
+    InspectorReflectionCache.fields(value.javaClass, "(uri|url|source|path|origin|image)").take(32).forEach { field ->
         runCatching { field.isAccessible = true; accept(field.get(value), "$source.${field.name}") }
+    }
+}
+
+/**
+ * Cache reflection metadata by runtime class and query. The inspector can visit hundreds of
+ * views per scan; repeatedly enumerating declaredFields/methods and compiling Regex objects
+ * for every view was a major avoidable source of main-thread work.
+ */
+private object InspectorReflectionCache {
+    private val lock = Any()
+    private val patterns = HashMap<String, Regex>()
+    private val fieldCache = WeakHashMap<Class<*>, MutableMap<String, List<java.lang.reflect.Field>>>()
+    private val methodCache = WeakHashMap<Class<*>, MutableMap<String, List<java.lang.reflect.Method>>>()
+
+    fun matches(value: String, expression: String): Boolean {
+        val pattern = synchronized(lock) {
+            patterns.getOrPut(expression) { Regex(expression, RegexOption.IGNORE_CASE) }
+        }
+        return pattern.containsMatchIn(value)
+    }
+
+    fun fields(type: Class<*>, expression: String): List<java.lang.reflect.Field> = synchronized(lock) {
+        fieldCache.getOrPut(type) { HashMap() }.getOrPut(expression) {
+            val pattern = patterns.getOrPut(expression) { Regex(expression, RegexOption.IGNORE_CASE) }
+            type.declaredFields.filter { pattern.containsMatchIn(it.name) }
+        }
+    }
+
+    fun methods(type: Class<*>, expression: String): List<java.lang.reflect.Method> = synchronized(lock) {
+        methodCache.getOrPut(type) { HashMap() }.getOrPut(expression) {
+            val pattern = patterns.getOrPut(expression) { Regex(expression, RegexOption.IGNORE_CASE) }
+            type.methods.filter { it.parameterTypes.isEmpty() && pattern.containsMatchIn(it.name) }
+        }
     }
 }
 
@@ -510,7 +540,7 @@ private object InspectorTree {
 
     private fun collectCardJson(view: View): List<String> {
         val className = view.javaClass.name
-        val cardLike = Regex("(ark|card|struct|json|share)", RegexOption.IGNORE_CASE).containsMatchIn(className)
+        val cardLike = InspectorReflectionCache.matches(className, "(ark|card|struct|json|share)")
         val found = LinkedHashSet<String>()
         fun accept(value: Any?) {
             val raw = when (value) {
@@ -532,14 +562,10 @@ private object InspectorTree {
         if (view is TextView && !view.text.isNullOrBlank()) accept(view.text.toString())
         fun inspectCardObject(value: Any?) {
             if (value == null || value is String || value is Number || value is Boolean) return
-            value.javaClass.declaredFields.filter {
-                Regex("(ark|card|json|payload|extra|meta|struct|share)", RegexOption.IGNORE_CASE).containsMatchIn(it.name)
-            }.take(32).forEach { field ->
+            InspectorReflectionCache.fields(value.javaClass, "(ark|card|json|payload|extra|meta|struct|share)").take(32).forEach { field ->
                 runCatching { field.isAccessible = true; accept(field.get(value)) }
             }
-            value.javaClass.methods.filter {
-                it.parameterTypes.isEmpty() && Regex("(ark|card|json|payload|extra|meta|struct|share)", RegexOption.IGNORE_CASE).containsMatchIn(it.name)
-            }.take(12).forEach { getter -> runCatching { accept(getter.invoke(value)) } }
+            InspectorReflectionCache.methods(value.javaClass, "(ark|card|json|payload|extra|meta|struct|share)").take(12).forEach { getter -> runCatching { accept(getter.invoke(value)) } }
         }
         accept(view.tag)
         inspectCardObject(view.tag)
@@ -547,16 +573,16 @@ private object InspectorTree {
         var type: Class<*>? = view.javaClass
         var depth = 0
         while (type != null && type != View::class.java && depth++ < 4) {
-            type.declaredFields.filter { Regex("(ark|card|json|payload|extra|meta|struct|share)", RegexOption.IGNORE_CASE).containsMatchIn(it.name) }
+            InspectorReflectionCache.fields(type, "(ark|card|json|payload|extra|meta|struct|share)")
                 .take(48).forEach { field ->
                     runCatching {
                         field.isAccessible = true
                         val value = field.get(view)
                         accept(value)
                         if (value != null && value !is String && value !is Number && value !is Boolean) {
-                            value.javaClass.declaredFields.filter { Regex("(ark|card|json|payload|extra|meta|struct|share)", RegexOption.IGNORE_CASE).containsMatchIn(it.name) }
+                            InspectorReflectionCache.fields(value.javaClass, "(ark|card|json|payload|extra|meta|struct|share)")
                                 .take(24).forEach { nested -> runCatching { nested.isAccessible = true; accept(nested.get(value)) } }
-                            value.javaClass.methods.filter { it.parameterTypes.isEmpty() && Regex("(ark|card|json|payload|extra|meta|struct|share)", RegexOption.IGNORE_CASE).containsMatchIn(it.name) }
+                            InspectorReflectionCache.methods(value.javaClass, "(ark|card|json|payload|extra|meta|struct|share)")
                                 .take(12).forEach { getter -> runCatching { accept(getter.invoke(value)) } }
                         }
                     }
