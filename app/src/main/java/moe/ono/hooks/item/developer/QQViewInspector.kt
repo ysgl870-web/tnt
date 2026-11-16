@@ -22,7 +22,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
-import android.view.animation.TimeInterpolator
+import android.animation.TimeInterpolator
 import android.webkit.WebView
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -1583,27 +1583,63 @@ private class InspectorOverlay private constructor(
     }
 
     private fun showLinkCaptureDetail(category: String, url: String, row: JSONObject) {
-        val parent = row.optString("parentUrl")
+        val parent = row.optString("parentUrl").trim()
         val display = row.optString("display", url)
         val time = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(row.optLong("time")))
-        val message = buildString {
-            append("分类：").append(category)
-            append("\n捕获时间：").append(time)
-            append("\n捕获来源：").append(row.optString("source"))
-            append("\n\n链接内容：\n").append(display)
-            if (parent.isNotBlank()) append("\n\n上级页面链接：\n").append(QQInspectorLinks.mask(parent))
-            if (display != url) append("\n\n签名参数已在界面中打码；复制时使用完整值。")
+        val panel = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(activity, 18), dp(activity, 12), dp(activity, 18), dp(activity, 8))
         }
-        val builder = AlertDialog.Builder(activity).setTitle("捕获详情").setMessage(message)
-            .setPositiveButton("复制完整内容") { _, _ -> copyText(activity, category, url) }
-            .setNegativeButton("跳转") { _, _ ->
+        fun line(text: String, strong: Boolean = false) {
+            panel.addView(TextView(activity).apply {
+                this.text = text
+                textSize = if (strong) 14f else 12f
+                setTextColor(if (strong) 0xFF18334A.toInt() else 0xFF526575.toInt())
+                setPadding(0, dp(activity, 5), 0, dp(activity, 5))
+            })
+        }
+        line("捕获时间：$time")
+        line("捕获来源：${row.optString("source", "未知来源")}")
+        line("分类：$category")
+        line("抓取到的链接", true)
+        line(display)
+        line("上级界面链接", true)
+        line(if (parent.isNotBlank()) QQInspectorLinks.mask(parent) else "未捕获到上级界面链接（该跳转可能没有可读取的来源 Activity / WebView URL）")
+        if (display != url) line("提示：界面展示已隐藏部分签名参数，跳转和复制使用完整链接。")
+        val scroll = android.widget.ScrollView(activity).apply { addView(panel) }
+        val dialog = AlertDialog.Builder(activity)
+            .setTitle("链接捕获详情")
+            .setView(scroll)
+            .setPositiveButton("关闭", null)
+            .create()
+        dialog.setOnShowListener {
+            val buttons = LinearLayout(activity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(activity, 18), 0, dp(activity, 18), dp(activity, 12))
+            }
+            fun action(text: String, callback: () -> Unit) {
+                buttons.addView(android.widget.Button(activity).apply {
+                    this.text = text
+                    setOnClickListener { callback() }
+                }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(activity, 44)).apply {
+                    bottomMargin = dp(activity, 6)
+                })
+            }
+            action(if (QQInspectorLinks.isImageKind(row.optString("kind"))) "打开图片链接" else "跳转打开链接") {
                 if (QQInspectorLinks.isImageKind(row.optString("kind"))) openHistoryUrl(url, preferQQ = false)
                 else confirmHistoryOpen(url)
             }
-        if (parent.isNotBlank()) {
-            builder.setNeutralButton("查看上级链接") { _, _ -> showParentLink(parent) }
+            if (parent.isNotBlank()) {
+                action("打开上级界面链接") { showParentLink(parent) }
+                action("复制上级界面链接") { copyText(activity, "上级界面链接", parent) }
+            }
+            action("复制抓取链接") { copyText(activity, category, url) }
+            (dialog.window?.decorView as? ViewGroup)?.let { decor ->
+                val root = decor.findViewById<ViewGroup>(android.R.id.content)
+                root?.addView(buttons)
+            }
         }
-        builder.show()
+        dialog.show()
     }
 
     private fun showParentLink(parentUrl: String) {
