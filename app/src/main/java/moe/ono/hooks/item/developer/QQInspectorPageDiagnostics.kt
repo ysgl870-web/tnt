@@ -17,8 +17,6 @@ import android.content.ClipboardManager
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.widget.LinearLayout
-import moe.ono.config.ConfigManager
-import moe.ono.constants.Constants
 import moe.ono.hooks._base.BaseClickableFunctionHookItem
 import moe.ono.hooks._core.annotation.HookItem
 import moe.ono.util.ContextUtils
@@ -215,8 +213,8 @@ internal object QQInspectorDiagnostics {
     private fun packageVersionCode(info: PackageInfo): String =
         if (Build.VERSION.SDK_INT >= 28) info.longVersionCode.toString() else info.versionCode.toString()
 
+    @Suppress("DEPRECATION")
     private fun packageInfo(context: Context): PackageInfo? = runCatching {
-        @Suppress("DEPRECATION")
         context.packageManager.getPackageInfo(context.packageName, 0)
     }.getOrNull()
 
