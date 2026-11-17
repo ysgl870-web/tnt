@@ -1885,11 +1885,11 @@ private class InspectorOverlay private constructor(
             return
         }
         val labels = matches.mapIndexed { index, node ->
-            "\${index + 1}. \${node.className.substringAfterLast('.')}\n" +
-                "\${node.resourceId} · \${node.width}×\${node.height} · \${node.area}px²"
+            "${index + 1}. ${node.className.substringAfterLast('.')}\n" +
+                "${node.resourceId} · ${node.width}×${node.height} · ${node.area}px²"
         }.toTypedArray()
         AlertDialog.Builder(activity)
-            .setTitle("查找结果 · \${matches.size} 个")
+            .setTitle("查找结果 · ${matches.size} 个")
             .setItems(labels) { _, which ->
                 matches.getOrNull(which)?.let { runSafely { showNode(it) } }
             }
