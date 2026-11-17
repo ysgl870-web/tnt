@@ -1307,6 +1307,8 @@ private class InspectorOverlay private constructor(
             colors = intArrayOf(0xFF00A9D6.toInt(), 0xFF1767C5.toInt()))
         addRow("↻  刷新控件树" to { refresh() }, "▦  控件列表 · ${nodes.size}" to { showList() })
         addRow("▧  图片 / 卡片数据" to { pullCardData() }, "⌁  保存页面链接" to { saveCurrentLinks() })
+        addRow("⌕  快速查找控件" to { searchControls() }, "◎  页面诊断" to { QQInspectorDiagnostics.show(activity) },
+            colors = intArrayOf(0xFF188F9F.toInt(), 0xFF2763A7.toInt()))
 
         addSection("LINK LAB  /  链接工具", "捕获记录、协议解析与跳转")
         addRow("◈  链接分类记录" to { showLinkHistory() },
@@ -1842,6 +1844,61 @@ private class InspectorOverlay private constructor(
             showInspectorToast("无法打开链接：${error.javaClass.simpleName}")
             false
         }
+    }
+
+    private fun searchControls() {
+        val input = EditText(activity).apply {
+            hint = "输入类名片段或资源 ID 关键词"
+            singleLine = true
+            textSize = 14f
+            setPadding(dp(activity, 12), dp(activity, 10), dp(activity, 12), dp(activity, 10))
+        }
+        val dialog = AlertDialog.Builder(activity)
+            .setTitle("快速查找控件")
+            .setMessage("只匹配控件类名和资源 ID，不搜索聊天文本。")
+            .setView(input)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("搜索", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val query = input.text?.toString()?.trim().orEmpty()
+                if (query.isBlank()) {
+                    input.error = "请输入类名或资源 ID 关键词"
+                    return@setOnClickListener
+                }
+                dialog.dismiss()
+                showControlSearchResults(query)
+            }
+        }
+        dialog.show()
+        dialog.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
+    }
+
+    private fun showControlSearchResults(query: String) {
+        val matches = nodes.filter {
+            it.className.contains(query, ignoreCase = true) ||
+                it.resourceId.contains(query, ignoreCase = true)
+        }.take(180)
+        if (matches.isEmpty()) {
+            showInspectorToast("没有找到匹配的控件：$query")
+            return
+        }
+        val labels = matches.mapIndexed { index, node ->
+            "\${index + 1}. \${node.className.substringAfterLast('.')}\n" +
+                "\${node.resourceId} · \${node.width}×\${node.height} · \${node.area}px²"
+        }.toTypedArray()
+        AlertDialog.Builder(activity)
+            .setTitle("查找结果 · \${matches.size} 个")
+            .setItems(labels) { _, which ->
+                matches.getOrNull(which)?.let { runSafely { showNode(it) } }
+            }
+            .setPositiveButton("刷新后重新查找") { _, _ ->
+                refresh()
+                searchControls()
+            }
+            .setNegativeButton("关闭", null)
+            .show()
     }
 
     private fun showList() {
