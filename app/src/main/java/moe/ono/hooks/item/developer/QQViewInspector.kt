@@ -1120,7 +1120,7 @@ private class InspectorOverlay private constructor(
     private var panelDragY = 0f
     private var panelStartX = 0f
     private var panelStartY = 0f
-    private var panelStartWidth = dp(activity, 204)
+    private var panelStartWidth = dp(activity, 224)
     private var panelStartHeight = dp(activity, 360)
     private var bordersVisible = true
     private var pickMode = false
@@ -1133,7 +1133,7 @@ private class InspectorOverlay private constructor(
         isClickable = false
         isFocusable = false
         addView(boxes, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
-        val panelParams = LayoutParams(dp(activity, 204), dp(activity, 360), Gravity.END or Gravity.CENTER_VERTICAL).apply {
+        val panelParams = LayoutParams(dp(activity, 224), dp(activity, 390), Gravity.END or Gravity.CENTER_VERTICAL).apply {
             marginEnd = dp(activity, 12)
         }
         addView(toolbarScroll, panelParams)
@@ -1183,12 +1183,8 @@ private class InspectorOverlay private constructor(
 
     private fun buildToolbar() {
         toolbar.removeAllViews()
-        toolbar.addView(TextView(activity).apply {
-            text = "☰  TNT 控件工具箱  ·  拖动移动"
-            textSize = 13f
-            setTextColor(0xFFFFFFFF.toInt())
-            setPadding(dp(activity, 8), dp(activity, 8), dp(activity, 8), dp(activity, 12))
-            setOnTouchListener { _, event ->
+        fun bindDrag(view: View) {
+            view.setOnTouchListener { _, event ->
                 val lp = toolbarScroll.layoutParams as? FrameLayout.LayoutParams ?: return@setOnTouchListener false
                 when (event.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
@@ -1197,8 +1193,7 @@ private class InspectorOverlay private constructor(
                         true
                     }
                     MotionEvent.ACTION_MOVE -> {
-                        val dx = event.rawX - panelDragX
-                        val dy = event.rawY - panelDragY
+                        val dx = event.rawX - panelDragX; val dy = event.rawY - panelDragY
                         val maxX = (root.width - toolbarScroll.width - lp.marginEnd).toFloat().coerceAtLeast(0f)
                         val maxY = (root.height - toolbarScroll.height).toFloat().coerceAtLeast(0f)
                         toolbarScroll.translationX = (panelStartX + dx).coerceIn(-maxX, 0f)
@@ -1209,30 +1204,142 @@ private class InspectorOverlay private constructor(
                     else -> true
                 }
             }
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        toolbar.addView(toolButton("收起悬浮面板") { setPanelExpanded(false) }, buttonParams())
-        toolbar.addView(toolButton("控件列表 · ${nodes.size}") { showList() }, buttonParams())
-        toolbar.addView(toolButton(if (pickMode) "点选模式：开启" else "点选模式：关闭") { togglePickMode() }, buttonParams())
-        toolbar.addView(toolButton(if (multiSelect) "多选模式：开启 · ${selectedViews.size}" else "多选模式：关闭") { toggleMultiSelect() }, buttonParams())
-        if (selectedViews.isNotEmpty()) toolbar.addView(toolButton("批量操作 · ${selectedViews.size}") { showBatchActions() }, buttonParams())
-        toolbar.addView(toolButton("刷新控件") { refresh() }, buttonParams())
-        toolbar.addView(toolButton(if (bordersVisible) "控件边框：显示" else "控件边框：隐藏") { toggleBorders() }, buttonParams())
-        toolbar.addView(toolButton("恢复隐藏 / 移除控件") { restoreControls() }, buttonParams())
-        toolbar.addView(toolButton("清除持续规则") { clearPersistentRules() }, buttonParams())
-        toolbar.addView(toolButton("扫描当前页面") { scanCurrentPage() }, buttonParams())
-        toolbar.addView(toolButton("拉取图片 / 卡片数据") { pullCardData() }, buttonParams())
-        toolbar.addView(toolButton("保存页面链接") { saveCurrentLinks() }, buttonParams())
-        toolbar.addView(toolButton("链接分类记录") { showLinkHistory() }, buttonParams())
-        toolbar.addView(toolButton("Scheme / URL 跳板转换") { QQInspectorBridgeDialog.show(activity) }, buttonParams())
-        toolbar.addView(toolButton("复制控件结构") { copyTree() }, buttonParams())
-        toolbar.addView(toolButton("停用探测功能") { disableFeature() }, buttonParams())
-        toolbar.addView(toolButton("关闭悬浮探测") { close() }, buttonParams())
-        toolbar.addView(TextView(activity).apply {
-            text = "↘  拖动调整面板大小"
-            textSize = 11f
+        }
+
+        val header = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(activity, 12), dp(activity, 11), dp(activity, 12), dp(activity, 11))
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                intArrayOf(0xF51B4267.toInt(), 0xF510739D.toInt(), 0xF51A3158.toInt())
+            ).apply {
+                cornerRadius = dp(activity, 16).toFloat()
+                setStroke(dp(activity, 1), 0x995DD7FF.toInt())
+            }
+            elevation = dp(activity, 5).toFloat()
+        }
+        val titleRow = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val titleBlock = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
+        titleBlock.addView(TextView(activity).apply {
+            text = "TNT  /  BLACK SHELL"
+            textSize = 14f
+            setTextColor(0xFFFFFFFF.toInt())
+            typeface = android.graphics.Typeface.create("sans-serif-black", android.graphics.Typeface.BOLD)
+            letterSpacing = 0.055f
+        })
+        titleBlock.addView(TextView(activity).apply {
+            text = "实时页面探测 · 按住标题拖动"
+            textSize = 10f
+            setTextColor(0xFFB9E9FF.toInt())
+            setPadding(0, dp(activity, 3), 0, 0)
+        })
+        titleRow.addView(titleBlock, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        titleRow.addView(TextView(activity).apply {
+            text = "● LIVE"
+            textSize = 9f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(0xFFB9FFF0.toInt())
             gravity = Gravity.CENTER
-            setTextColor(0xFFE6F7FF.toInt())
-            setPadding(dp(activity, 8), dp(activity, 9), dp(activity, 8), dp(activity, 9))
+            setPadding(dp(activity, 8), dp(activity, 5), dp(activity, 8), dp(activity, 5))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(activity, 20).toFloat()
+                setColor(0x443CE4C2)
+                setStroke(dp(activity, 1), 0x9959E8CD.toInt())
+            }
+        })
+        header.addView(titleRow)
+        bindDrag(titleRow)
+        toolbar.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            bottomMargin = dp(activity, 12)
+        })
+
+        fun addSection(title: String, subtitle: String) {
+            val section = LinearLayout(activity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(activity, 3), dp(activity, 5), dp(activity, 3), dp(activity, 6))
+            }
+            val line = LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            line.addView(TextView(activity).apply {
+                text = title; textSize = 10f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(0xFF80DFFF.toInt()); letterSpacing = 0.08f
+            })
+            line.addView(View(activity).apply { setBackgroundColor(0x665DD7FF) },
+                LinearLayout.LayoutParams(0, dp(activity, 1), 1f).apply { marginStart = dp(activity, 8) })
+            section.addView(line)
+            section.addView(TextView(activity).apply {
+                text = subtitle; textSize = 9f
+                setTextColor(0xFF9BB5C9.toInt())
+                setPadding(0, dp(activity, 3), 0, 0)
+            })
+            toolbar.addView(section, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(activity, 2)
+            })
+        }
+
+        fun addRow(vararg items: Pair<String, () -> Unit>, colors: IntArray = intArrayOf(0xFF087DBB.toInt(), 0xFF1456A0.toInt())) {
+            val row = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
+            items.forEachIndexed { index, item ->
+                val button = toolButton(item.first, item.second, colors)
+                row.addView(button, LinearLayout.LayoutParams(0, dp(activity, 48), 1f).apply {
+                    if (index > 0) marginStart = dp(activity, 6)
+                })
+                button.alpha = 0f; button.translationY = dp(activity, 7).toFloat()
+                button.post {
+                    button.animate().alpha(1f).translationY(0f)
+                        .setStartDelay(index * 38L).setDuration(190L)
+                        .setInterpolator(android.view.animation.DecelerateInterpolator()).start()
+                }
+            }
+            toolbar.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = dp(activity, 5)
+            })
+        }
+
+        addSection("LIVE SCAN  /  实时扫描", "仅提取当前页面可见控件与 WebView 数据")
+        addRow("✦  扫描当前页面" to { scanCurrentPage() },
+            colors = intArrayOf(0xFF00A9D6.toInt(), 0xFF1767C5.toInt()))
+        addRow("↻  刷新控件树" to { refresh() }, "▦  控件列表 · ${nodes.size}" to { showList() })
+        addRow("▧  图片 / 卡片数据" to { pullCardData() }, "⌁  保存页面链接" to { saveCurrentLinks() })
+
+        addSection("LINK LAB  /  链接工具", "捕获记录、协议解析与跳转")
+        addRow("◈  链接分类记录" to { showLinkHistory() },
+            "⇄  Scheme / URL 跳板" to { QQInspectorBridgeDialog.show(activity) },
+            colors = intArrayOf(0xFF7357D8.toInt(), 0xFF236DBB.toInt()))
+
+        addSection("VIEW CONTROL  /  控件操作", "点选控件后可查看详情或执行可恢复操作")
+        addRow((if (pickMode) "●  点选模式：开" else "○  点选模式：关") to { togglePickMode() },
+            (if (multiSelect) "▣  多选：开 · ${selectedViews.size}" else "▢  多选模式：关") to { toggleMultiSelect() },
+            colors = intArrayOf(0xFF087DBB.toInt(), 0xFF15518C.toInt()))
+        addRow((if (bordersVisible) "▣  控件边框：显示" else "□  控件边框：隐藏") to { toggleBorders() },
+            "↶  恢复隐藏 / 移除" to { restoreControls() },
+            colors = intArrayOf(0xFF167D9E.toInt(), 0xFF195A84.toInt()))
+        if (selectedViews.isNotEmpty()) {
+            addRow("▦  批量操作 · ${selectedViews.size}" to { showBatchActions() },
+                colors = intArrayOf(0xFFB46B24.toInt(), 0xFF9B4C50.toInt()))
+        }
+        addRow("⌫  清除持续规则" to { clearPersistentRules() },
+            "▤  复制控件结构" to { copyTree() },
+            colors = intArrayOf(0xFF426C88.toInt(), 0xFF36527D.toInt()))
+
+        addSection("SESSION  /  会话", "操作只影响当前 QQ 页面与 TNT 本地设置")
+        addRow("⤵  收起悬浮面板" to { setPanelExpanded(false) },
+            "⏻  关闭悬浮探测" to { close() },
+            colors = intArrayOf(0xFF4C6176.toInt(), 0xFF3C4B60.toInt()))
+        addRow("⚙  停用探测功能" to { disableFeature() },
+            colors = intArrayOf(0xFF9A4B64.toInt(), 0xFF70415F.toInt()))
+
+        toolbar.addView(TextView(activity).apply {
+            text = "↘  拖动这里调整面板大小"
+            textSize = 10f; gravity = Gravity.CENTER
+            setTextColor(0xFFBDEBFF.toInt())
+            setPadding(dp(activity, 8), dp(activity, 10), dp(activity, 8), dp(activity, 8))
             setOnTouchListener { _, event ->
                 val lp = toolbarScroll.layoutParams as? FrameLayout.LayoutParams ?: return@setOnTouchListener false
                 when (event.actionMasked) {
@@ -1242,8 +1349,10 @@ private class InspectorOverlay private constructor(
                         true
                     }
                     MotionEvent.ACTION_MOVE -> {
-                        lp.width = (panelStartWidth + event.rawX - panelDragX).toInt().coerceIn(dp(activity, 168), (root.width * .9f).toInt().coerceAtLeast(dp(activity, 168)))
-                        lp.height = (panelStartHeight + event.rawY - panelDragY).toInt().coerceIn(dp(activity, 180), (root.height * .9f).toInt().coerceAtLeast(dp(activity, 180)))
+                        lp.width = (panelStartWidth + event.rawX - panelDragX).toInt()
+                            .coerceIn(dp(activity, 184), (root.width * .92f).toInt().coerceAtLeast(dp(activity, 184)))
+                        lp.height = (panelStartHeight + event.rawY - panelDragY).toInt()
+                            .coerceIn(dp(activity, 220), (root.height * .9f).toInt().coerceAtLeast(dp(activity, 220)))
                         toolbarScroll.layoutParams = lp
                         true
                     }
@@ -1251,11 +1360,7 @@ private class InspectorOverlay private constructor(
                     else -> true
                 }
             }
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(activity, 38)))
-    }
-
-    private fun buttonParams() = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(activity, 42)).apply {
-        bottomMargin = dp(activity, 5)
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(activity, 36)))
     }
 
     private fun showInspectorToast(message: String) {
@@ -1288,27 +1393,30 @@ private class InspectorOverlay private constructor(
         }
     }
 
-    private fun toolButton(label: String, action: () -> Unit) = TextView(activity).apply {
-        text = label
-        textSize = 12f
-        gravity = Gravity.CENTER
+    private fun toolButton(label: String, action: () -> Unit, colors: IntArray = intArrayOf(0xFF087DBB.toInt(), 0xFF1456A0.toInt())) = TextView(activity).apply {
+        text = label; textSize = 11f; gravity = Gravity.CENTER
+        maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END
+        includeFontPadding = false
+        setLineSpacing(dp(activity, 2).toFloat(), 1f)
         setTextColor(0xFFFFFFFF.toInt())
-        background = GradientDrawable(
+        val shape = GradientDrawable(
             GradientDrawable.Orientation.LEFT_RIGHT,
-            intArrayOf(0xFF087DBB.toInt(), 0xFF1456A0.toInt())
+            intArrayOf(colors[0], colors.getOrElse(1) { colors[0] })
         ).apply {
             shape = GradientDrawable.RECTANGLE
-            cornerRadius = dp(activity, 11).toFloat()
+            cornerRadius = dp(activity, 13).toFloat()
             setStroke(dp(activity, 1), 0x665DD7FF)
         }
-        setPadding(dp(activity, 13), 0, dp(activity, 8), 0)
-        isClickable = true
-        isFocusable = true
-        elevation = dp(activity, 2).toFloat()
+        background = android.graphics.drawable.RippleDrawable(
+            android.content.res.ColorStateList.valueOf(0x44FFFFFF), shape, null
+        )
+        setPadding(dp(activity, 5), dp(activity, 5), dp(activity, 5), dp(activity, 5))
+        isClickable = true; isFocusable = true; elevation = dp(activity, 3).toFloat()
         setOnClickListener {
-            animate().scaleX(0.975f).scaleY(0.975f).alpha(0.88f).setDuration(70L).withEndAction {
-                animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(140L)
-                    .setInterpolator(android.view.animation.DecelerateInterpolator()).start()
+            animate().cancel()
+            animate().scaleX(0.955f).scaleY(0.955f).alpha(0.86f).setDuration(75L).withEndAction {
+                animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(155L)
+                    .setInterpolator(android.view.animation.OvershootInterpolator(1.15f)).start()
                 runSafely(action)
             }.start()
         }
@@ -1412,44 +1520,47 @@ private class InspectorOverlay private constructor(
 
     private fun scanCurrentPageData() {
         runSafely {
-            val activityLinks = QQInspectorLinks.captureActivity(activity)
+            // Fresh snapshot of the currently attached visible view tree only.
+            // Do not merge message-extractor caches, persisted link history or stale Activity intents.
             val scanned = InspectorTree.collect(activity)
             nodes = scanned
             boxes.setNodes(nodes)
-            val links = (activityLinks + scanned.flatMap { it.directLinks + it.links } +
-                QQMsgExtractStore.allLinks()).distinct()
-            val images = (scanned.flatMap { it.imageLinks } + QQMsgExtractStore.allImages()).distinct()
-            val cards = (scanned.flatMap { it.cardJsons } + QQMsgExtractStore.allCards()).distinct()
+            val links = scanned.flatMap { it.directLinks + it.links }.distinct()
+            val images = scanned.flatMap { it.imageLinks }.distinct()
+            val cards = scanned.flatMap { it.cardJsons }.distinct()
             val report = buildString {
-                append("TNT 当前页面扫描结果")
+                append("TNT 当前页面实时扫描结果")
+                append("\n扫描来源：本次扫描时当前 Activity 的可见控件 / WebView")
                 append("\n控件：").append(scanned.size)
-                append("\n已提取消息：").append(QQMsgExtractStore.size()).append(" 条")
-                append("\n跳转 / 页面链接：").append(links.size)
-                append("\n图片直链：").append(images.size)
-                append("\nArk 卡片 JSON：").append(cards.size)
-                append("\n\n【跳转链接】")
-                append(if (links.isEmpty()) "\n未发现" else "\n" + links.joinToString("\n"))
-                append("\n\n【图片直链】")
-                append(if (images.isEmpty()) "\n未发现可见原始直链" else "\n" + images.joinToString("\n"))
-                append("\n\n【Ark 卡片 JSON】")
-                if (cards.isEmpty()) append("\n未从当前可见控件模型中提取到 JSON")
-                else cards.forEachIndexed { index, json -> append("\n\n--- 卡片 ").append(index + 1).append(" ---\n").append(json) }
+                append("\n当前页面链接：").append(links.size)
+                append("\n当前页面图片直链：").append(images.size)
+                append("\n当前页面 Ark 卡片 JSON：").append(cards.size)
+                append("\n\n【当前页面跳转链接】")
+                append(if (links.isEmpty()) "\n未从当前可见页面发现链接" else "\n" + links.joinToString("\n"))
+                append("\n\n【当前页面图片直链】")
+                append(if (images.isEmpty()) "\n未从当前可见控件模型中发现图片直链" else "\n" + images.joinToString("\n"))
+                append("\n\n【当前页面 Ark 卡片 JSON】")
+                if (cards.isEmpty()) append("\n未从当前可见控件模型中发现 JSON")
+                else cards.forEachIndexed { index, json ->
+                    append("\n\n--- 当前页面卡片 ").append(index + 1).append(" ---\n").append(json)
+                }
+                append("\n\n说明：此结果不包含历史链接记录、已提取消息缓存或其他页面的数据。")
             }
             val scroll = android.widget.ScrollView(activity).apply {
                 isFillViewport = false
                 addView(TextView(activity).apply {
-                    text = report; textSize = 13f; setTextColor(0xFF172B43.toInt())
-                    setTextIsSelectable(true)
+                    text = report; textSize = 13f
+                    setTextColor(0xFF172B43.toInt()); setTextIsSelectable(true)
                     setPadding(dp(activity, 16), dp(activity, 14), dp(activity, 16), dp(activity, 18))
                 }, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             }
             AlertDialog.Builder(activity)
-                .setTitle("当前页面扫描 · ${scanned.size} 个控件")
+                .setTitle("实时页面扫描 · ${scanned.size} 个控件")
                 .setView(scroll)
-                .setPositiveButton("复制扫描结果") { _, _ -> copyText(activity, "TNT 页面扫描结果", report) }
-                .setNeutralButton("复制全部卡片 JSON") { _, _ ->
+                .setPositiveButton("复制扫描结果") { _, _ -> copyText(activity, "TNT 实时页面扫描结果", report) }
+                .setNeutralButton("复制当前页卡片 JSON") { _, _ ->
                     if (cards.isEmpty()) showInspectorToast("当前页面没有识别到 Ark 卡片 JSON")
-                    else copyText(activity, "Ark 卡片 JSON", cards.joinToString("\n\n"))
+                    else copyText(activity, "当前页面 Ark 卡片 JSON", cards.joinToString("\n\n"))
                 }
                 .setNegativeButton("关闭", null)
                 .show()
@@ -1692,9 +1803,9 @@ private class InspectorOverlay private constructor(
     }
 
     /**
-     * Open captured links with an explicit, predictable fallback chain.
-     * Web URLs: QQ -> TIM -> installed browser -> Android resolver.
-     * QQ custom schemes: QQ -> TIM -> Android resolver (never force a browser).
+     * Keep the legacy QQ in-app deep-link route. Do not add CATEGORY_BROWSABLE
+     * or force an installed browser package: those changes can bypass QQ's
+     * own implicit handlers for captured http and mqqapi links.
      */
     private fun openHistoryUrl(url: String, preferQQ: Boolean): Boolean {
         val value = url.trim()
@@ -1703,69 +1814,34 @@ private class InspectorOverlay private constructor(
             return false
         }
         val uri = runCatching { Uri.parse(value) }.getOrNull()
-        val scheme = uri?.scheme?.lowercase(Locale.ROOT)
-        if (uri == null || scheme.isNullOrBlank()) {
+        if (uri == null || uri.scheme.isNullOrBlank()) {
             showInspectorToast("链接格式无效，无法跳转")
             return false
         }
-        val isWebUrl = scheme == "http" || scheme == "https"
-        val isQQScheme = scheme == "mqq" || scheme == "mqqapi" || scheme == "tim"
-
-        fun launch(intent: Intent, label: String): Boolean {
-            return try {
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                activity.startActivity(intent)
-                showInspectorToast("已交给${label}打开")
-                true
-            } catch (error: Throwable) {
-                Logger.w("TNT link open via $label failed: ${error.javaClass.simpleName}")
-                false
-            }
-        }
-
-        val qqFirst = preferQQ || isQQScheme || !isWebUrl
-        if (qqFirst) {
+        if (preferQQ) {
             for (pkg in listOf("com.tencent.mobileqq", "com.tencent.tim")) {
                 val intent = Intent(Intent.ACTION_VIEW, uri)
-                    .addCategory(Intent.CATEGORY_BROWSABLE)
                     .setPackage(pkg)
-                if (launch(intent, if (pkg == "com.tencent.mobileqq") "QQ" else "TIM")) return true
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                try {
+                    activity.startActivity(intent)
+                    showInspectorToast(if (pkg == "com.tencent.mobileqq") "已交给 QQ 内部链接处理" else "已交给 TIM 处理")
+                    return true
+                } catch (error: Throwable) {
+                    Logger.w("TNT in-app link open via $pkg failed: ${error.javaClass.simpleName}")
+                }
             }
         }
-
-        // For ordinary web links, explicitly try known browser packages before
-        // the generic resolver. This avoids silently returning to the same QQ handler.
-        if (isWebUrl) {
-            val browsers = listOf(
-                "com.android.chrome",
-                "com.google.android.apps.chrome",
-                "com.android.browser",
-                "com.sec.android.app.sbrowser",
-                "org.mozilla.firefox",
-                "com.microsoft.emmx",
-                "com.brave.browser",
-                "com.opera.browser"
-            )
-            for (pkg in browsers) {
-                val intent = Intent(Intent.ACTION_VIEW, uri)
-                    .addCategory(Intent.CATEGORY_BROWSABLE)
-                    .setPackage(pkg)
-                if (launch(intent, "浏览器")) return true
-            }
+        return try {
+            // Keep the legacy implicit ACTION_VIEW fallback, without BROWSABLE.
+            activity.startActivity(Intent(Intent.ACTION_VIEW, uri))
+            showInspectorToast("已交给系统链接处理")
+            true
+        } catch (error: Throwable) {
+            Logger.w("TNT fallback link open failed: ${error.javaClass.simpleName}")
+            showInspectorToast("无法打开链接：${error.javaClass.simpleName}")
+            false
         }
-
-        val fallback = Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE)
-        if (launch(fallback, if (isWebUrl) "系统默认浏览器" else "系统应用")) return true
-
-        // Custom schemes often omit CATEGORY_BROWSABLE. Retry QQ/TIM without
-        // that category so app-specific deep-link filters can still match.
-        if (!isWebUrl) {
-            for (pkg in listOf("com.tencent.mobileqq", "com.tencent.tim")) {
-                if (launch(Intent(Intent.ACTION_VIEW, uri).setPackage(pkg), if (pkg == "com.tencent.mobileqq") "QQ" else "TIM")) return true
-            }
-        }
-        showInspectorToast(if (isWebUrl) "未找到可用浏览器或 QQ 页面入口" else "QQ / TIM 未能处理此 Scheme 链接")
-        return false
     }
 
     private fun showList() {
