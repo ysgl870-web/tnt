@@ -438,10 +438,15 @@ private object InspectorTree {
     private const val MAX_NODES = 420
     private const val MAX_DEPTH = 42
 
-    fun collect(activity: Activity): List<InspectorNode> {
-        val root = activity.findViewById<ViewGroup>(android.R.id.content) ?: return emptyList()
+    fun collect(activity: Activity, capturedPageLinks: List<String>? = null): List<InspectorNode> {
+        val root = runCatching { activity.findViewById<ViewGroup>(android.R.id.content) }.getOrNull()
+            ?: return emptyList()
         val result = ArrayList<InspectorNode>()
-        val pageLinks = QQInspectorLinks.captureActivity(activity)
+        // The caller may pass a separately captured Activity snapshot so links remain
+        // available even when a host page produces no measurable View nodes.
+        val pageLinks = capturedPageLinks ?: runCatching {
+            QQInspectorLinks.captureActivity(activity)
+        }.getOrDefault(emptyList())
         val rootOnScreen = IntArray(2)
         root.getLocationOnScreen(rootOnScreen)
 
@@ -468,9 +473,12 @@ private object InspectorTree {
                     "NO_ID"
                 }
                 val childCount = (view as? ViewGroup)?.childCount ?: 0
-                val directLinks = collectLinks(view)
-                val imageLinks = collectImageLinks(view)
-                val cardJsons = collectCardJson(view)
+                // QQ contains custom Views whose metadata getters can throw or be
+                // unavailable across host versions. Isolate each extractor so one
+                // unusual control cannot suppress the complete scan result.
+                val directLinks = runCatching { collectLinks(view) }.getOrDefault(emptyList())
+                val imageLinks = runCatching { collectImageLinks(view) }.getOrDefault(emptyList())
+                val cardJsons = runCatching { collectCardJson(view) }.getOrDefault(emptyList())
                 val cardLinks = cardJsons.flatMap { QQInspectorLinks.extractUrls(it) }
                 result.add(
                     InspectorNode(
@@ -1521,43 +1529,72 @@ private class InspectorOverlay private constructor(
     }
 
     private fun scanCurrentPageData() {
-        runSafely {
-            // Fresh snapshot of the currently attached visible view tree only.
-            // Do not merge message-extractor caches, persisted link history or stale Activity intents.
-            val scanned = InspectorTree.collect(activity)
-            nodes = scanned
-            boxes.setNodes(nodes)
-            val links = scanned.flatMap { it.directLinks + it.links }.distinct()
-            val images = scanned.flatMap { it.imageLinks }.distinct()
-            val cards = scanned.flatMap { it.cardJsons }.distinct()
-            val report = buildString {
-                append("TNT 当前页面实时扫描结果")
-                append("\n扫描来源：本次扫描时当前 Activity 的可见控件 / WebView")
-                append("\n控件：").append(scanned.size)
-                append("\n当前页面链接：").append(links.size)
-                append("\n当前页面图片直链：").append(images.size)
-                append("\n当前页面 Ark 卡片 JSON：").append(cards.size)
-                append("\n\n【当前页面跳转链接】")
-                append(if (links.isEmpty()) "\n未从当前可见页面发现链接" else "\n" + links.joinToString("\n"))
-                append("\n\n【当前页面图片直链】")
-                append(if (images.isEmpty()) "\n未从当前可见控件模型中发现图片直链" else "\n" + images.joinToString("\n"))
-                append("\n\n【当前页面 Ark 卡片 JSON】")
-                if (cards.isEmpty()) append("\n未从当前可见控件模型中发现 JSON")
-                else cards.forEachIndexed { index, json ->
-                    append("\n\n--- 当前页面卡片 ").append(index + 1).append(" ---\n").append(json)
-                }
-                append("\n\n说明：此结果不包含历史链接记录、已提取消息缓存或其他页面的数据。")
+        if (activity.isFinishing || activity.isDestroyed) return
+
+        // Capture the current Activity independently from the View-tree walk. This
+        // includes its live Intent data/extras, currently visible WebViews and visible
+        // text links. It is deliberately not merged with historical/message caches.
+        val activityLinks = runCatching {
+            QQInspectorLinks.captureActivity(activity)
+        }.onFailure {
+            Logger.w("TNT page scan Activity capture failed: ${it.javaClass.simpleName}")
+        }.getOrDefault(emptyList())
+
+        val treeResult = runCatching {
+            InspectorTree.collect(activity, activityLinks)
+        }
+        val scanned = treeResult.getOrElse { error ->
+            Logger.e("TNT page scan View-tree collection failed", error)
+            emptyList()
+        }
+
+        nodes = scanned
+        runCatching { boxes.setNodes(nodes) }
+            .onFailure { Logger.w("TNT page scan overlay update failed: ${it.javaClass.simpleName}") }
+
+        // Include Activity-level links even if the current screen has no measurable
+        // child Views. De-duplicate against links extracted from visible controls.
+        val links = (activityLinks + scanned.flatMap { it.directLinks + it.links })
+            .map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        val images = scanned.flatMap { it.imageLinks }.distinct()
+        val cards = scanned.flatMap { it.cardJsons }.distinct()
+        val report = buildString {
+            append("TNT 当前页面实时扫描结果")
+            append("\n扫描来源：当前 Activity 的 Intent / 可见 WebView / 可见文本 / 可见控件模型")
+            append("\n控件：").append(scanned.size)
+            append("\nActivity / WebView / 页面文本链接：").append(activityLinks.size)
+            append("\n当前页面链接（去重）：").append(links.size)
+            append("\n当前页面图片直链：").append(images.size)
+            append("\n当前页面 Ark 卡片 JSON：").append(cards.size)
+            if (treeResult.isFailure) {
+                append("\n控件树扫描状态：部分控件读取失败，已保留 Activity 链接结果")
+                append("\n异常：").append(treeResult.exceptionOrNull()?.javaClass?.simpleName ?: "未知")
             }
+            append("\n\n【当前页面跳转链接】")
+            append(if (links.isEmpty()) "\n未从当前页面发现链接" else "\n" + links.joinToString("\n"))
+            append("\n\n【当前页面图片直链】")
+            append(if (images.isEmpty()) "\n未从当前可见控件模型中发现图片直链" else "\n" + images.joinToString("\n"))
+            append("\n\n【当前页面 Ark 卡片 JSON】")
+            if (cards.isEmpty()) append("\n未从当前可见控件模型中发现 JSON")
+            else cards.forEachIndexed { index, json ->
+                append("\n\n--- 当前页面卡片 ").append(index + 1).append(" ---\n").append(json)
+            }
+            append("\n\n说明：只展示本次扫描时当前 Activity 的数据，不读取历史链接记录或其他页面的缓存。")
+        }
+
+        runCatching {
             val scroll = android.widget.ScrollView(activity).apply {
                 isFillViewport = false
                 addView(TextView(activity).apply {
-                    text = report; textSize = 13f
-                    setTextColor(0xFF172B43.toInt()); setTextIsSelectable(true)
+                    text = report
+                    textSize = 13f
+                    setTextColor(0xFF172B43.toInt())
+                    setTextIsSelectable(true)
                     setPadding(dp(activity, 16), dp(activity, 14), dp(activity, 16), dp(activity, 18))
                 }, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             }
             AlertDialog.Builder(activity)
-                .setTitle("实时页面扫描 · ${scanned.size} 个控件")
+                .setTitle("实时页面扫描 · ${scanned.size} 个控件 · ${links.size} 条链接")
                 .setView(scroll)
                 .setPositiveButton("复制扫描结果") { _, _ -> copyText(activity, "TNT 实时页面扫描结果", report) }
                 .setNeutralButton("复制当前页卡片 JSON") { _, _ ->
@@ -1566,8 +1603,13 @@ private class InspectorOverlay private constructor(
                 }
                 .setNegativeButton("关闭", null)
                 .show()
-            buildToolbar()
+        }.onFailure {
+            Logger.e("TNT page scan result dialog failed", it)
+            showInspectorToast("扫描完成，但结果窗口显示失败：${it.javaClass.simpleName}")
         }
+
+        runCatching { buildToolbar() }
+            .onFailure { Logger.w("TNT page scan toolbar refresh failed: ${it.javaClass.simpleName}") }
     }
 
     /** Pull refreshes the live view hierarchy and exposed models, not authenticated network traffic. */
@@ -1805,9 +1847,9 @@ private class InspectorOverlay private constructor(
     }
 
     /**
-     * Keep the legacy QQ in-app deep-link route. Do not add CATEGORY_BROWSABLE
-     * or force an installed browser package: those changes can bypass QQ's
-     * own implicit handlers for captured http and mqqapi links.
+     * Restore the pre-regression QQ/TIM route: QQ and TIM are tried first with
+     * CATEGORY_BROWSABLE, followed by resolver fallback. Several QQ internal
+     * pages only expose their VIEW filters when this category is present.
      */
     private fun openHistoryUrl(url: String, preferQQ: Boolean): Boolean {
         val value = url.trim()
@@ -1816,34 +1858,76 @@ private class InspectorOverlay private constructor(
             return false
         }
         val uri = runCatching { Uri.parse(value) }.getOrNull()
-        if (uri == null || uri.scheme.isNullOrBlank()) {
+        val scheme = uri?.scheme?.lowercase(Locale.ROOT)
+        if (uri == null || scheme.isNullOrBlank()) {
             showInspectorToast("链接格式无效，无法跳转")
             return false
         }
-        if (preferQQ) {
-            for (pkg in listOf("com.tencent.mobileqq", "com.tencent.tim")) {
-                val intent = Intent(Intent.ACTION_VIEW, uri)
-                    .setPackage(pkg)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                try {
-                    activity.startActivity(intent)
-                    showInspectorToast(if (pkg == "com.tencent.mobileqq") "已交给 QQ 内部链接处理" else "已交给 TIM 处理")
-                    return true
-                } catch (error: Throwable) {
-                    Logger.w("TNT in-app link open via $pkg failed: ${error.javaClass.simpleName}")
-                }
+
+        val isWebUrl = scheme == "http" || scheme == "https"
+        val isQQScheme = scheme in setOf("mqq", "mqqapi", "mqqwpa", "qqdocurl", "qq", "tencent", "tim")
+
+        fun launch(intent: Intent, label: String): Boolean {
+            return try {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                activity.startActivity(intent)
+                showInspectorToast("已交给$label打开")
+                true
+            } catch (error: Throwable) {
+                Logger.w("TNT link open via $label failed: ${error.javaClass.simpleName}")
+                false
             }
         }
-        return try {
-            // Keep the legacy implicit ACTION_VIEW fallback, without BROWSABLE.
-            activity.startActivity(Intent(Intent.ACTION_VIEW, uri))
-            showInspectorToast("已交给系统链接处理")
-            true
-        } catch (error: Throwable) {
-            Logger.w("TNT fallback link open failed: ${error.javaClass.simpleName}")
-            showInspectorToast("无法打开链接：${error.javaClass.simpleName}")
-            false
+
+        // First try QQ/TIM in-app handlers. Keep BROWSABLE here: this is the
+        // category used by older TNT builds that successfully opened QQ pages.
+        if (preferQQ || isQQScheme || !isWebUrl) {
+            for (pkg in listOf("com.tencent.mobileqq", "com.tencent.tim")) {
+                val intent = Intent(Intent.ACTION_VIEW, uri)
+                    .addCategory(Intent.CATEGORY_BROWSABLE)
+                    .setPackage(pkg)
+                if (launch(intent, if (pkg == "com.tencent.mobileqq") "QQ" else "TIM")) return true
+            }
         }
+
+        // A few QQ custom schemes do not declare BROWSABLE. Retry them without
+        // the category before handing the URI to an unrelated application.
+        if (isQQScheme) {
+            for (pkg in listOf("com.tencent.mobileqq", "com.tencent.tim")) {
+                val intent = Intent(Intent.ACTION_VIEW, uri).setPackage(pkg)
+                if (launch(intent, if (pkg == "com.tencent.mobileqq") "QQ" else "TIM")) return true
+            }
+        }
+
+        if (isWebUrl) {
+            val browsers = listOf(
+                "com.android.chrome",
+                "com.google.android.apps.chrome",
+                "com.android.browser",
+                "com.sec.android.app.sbrowser",
+                "org.mozilla.firefox",
+                "com.microsoft.emmx",
+                "com.brave.browser",
+                "com.opera.browser"
+            )
+            for (pkg in browsers) {
+                val intent = Intent(Intent.ACTION_VIEW, uri)
+                    .addCategory(Intent.CATEGORY_BROWSABLE)
+                    .setPackage(pkg)
+                if (launch(intent, "浏览器")) return true
+            }
+        }
+
+        val fallback = Intent(Intent.ACTION_VIEW, uri)
+            .addCategory(Intent.CATEGORY_BROWSABLE)
+        if (launch(fallback, if (isWebUrl) "系统默认浏览器" else "系统应用")) return true
+
+        // Last compatibility fallback for handlers that require an implicit
+        // VIEW intent without BROWSABLE.
+        if (launch(Intent(Intent.ACTION_VIEW, uri), "系统链接处理器")) return true
+
+        showInspectorToast(if (isWebUrl) "未找到可用的 QQ 页面入口或浏览器" else "没有应用能够处理此 Scheme")
+        return false
     }
 
     private fun searchControls() {
