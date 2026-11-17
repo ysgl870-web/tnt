@@ -157,9 +157,7 @@ internal object QQInspectorDiagnostics {
         val density = String.format(Locale.getDefault(), "%.2f", metrics.density)
         val now = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
         val versionName = packageInfo?.versionName ?: "未知"
-        val versionCode = packageInfo?.let {
-            if (Build.VERSION.SDK_INT >= 28) it.longVersionCode.toString() else @Suppress("DEPRECATION") it.versionCode.toString()
-        } ?: "未知"
+        val versionCode = packageInfo?.let { packageVersionCode(it) } ?: "未知"
         val hostType = when (packageName) {
             "com.tencent.mobileqq" -> "QQ"
             "com.tencent.tim" -> "TIM"
@@ -212,6 +210,10 @@ internal object QQInspectorDiagnostics {
             appendLine("未获取到的宿主内部状态会标记为未暴露，不进行猜测。")
         }
     }
+
+    @Suppress("DEPRECATION")
+    private fun packageVersionCode(info: PackageInfo): String =
+        if (Build.VERSION.SDK_INT >= 28) info.longVersionCode.toString() else info.versionCode.toString()
 
     private fun packageInfo(context: Context): PackageInfo? = runCatching {
         @Suppress("DEPRECATION")
