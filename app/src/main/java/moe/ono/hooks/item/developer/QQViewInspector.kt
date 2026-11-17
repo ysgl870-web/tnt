@@ -1131,6 +1131,7 @@ private class InspectorOverlay private constructor(
     private var panelStartWidth = dp(activity, 224)
     private var panelStartHeight = dp(activity, 360)
     private var bordersVisible = true
+    private var scanRequestId = 0
     private var pickMode = false
     private var multiSelect = false
     private val selectedViews = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<View, Boolean>())
@@ -1523,13 +1524,22 @@ private class InspectorOverlay private constructor(
     /** Re-scan visible views and aggregate links, image sources and Ark payloads. */
     private fun scanCurrentPage() {
         showInspectorToast("正在从上到下扫描页面…")
-        boxes.animateScan {
-            scanCurrentPageData()
+        val requestId = ++scanRequestId
+        var completed = false
+        val finishScan = {
+            if (requestId == scanRequestId && !completed) {
+                completed = true
+                scanCurrentPageData()
+            }
         }
+        // Normally the sweep animation invokes finishScan. Keep a delayed fallback
+        // as well, so animation cancellation/detachment cannot leave the scan silent.
+        boxes.animateScan(finishScan)
+        boxes.postDelayed({ finishScan() }, 1350L)
     }
 
     private fun scanCurrentPageData() {
-        if (activity.isFinishing || activity.isDestroyed) return
+        if (activity.isFinishing || activity.isDestroyed || parent == null) return
 
         // Capture the current Activity independently from the View-tree walk. This
         // includes its live Intent data/extras, currently visible WebViews and visible
@@ -1871,7 +1881,7 @@ private class InspectorOverlay private constructor(
             return try {
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 activity.startActivity(intent)
-                showInspectorToast("已交给$label打开")
+                showInspectorToast("已交给${label}打开")
                 true
             } catch (error: Throwable) {
                 Logger.w("TNT link open via $label failed: ${error.javaClass.simpleName}")
