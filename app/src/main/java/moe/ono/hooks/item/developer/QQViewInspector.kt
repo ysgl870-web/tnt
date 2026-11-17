@@ -1849,7 +1849,7 @@ private class InspectorOverlay private constructor(
     private fun searchControls() {
         val input = EditText(activity).apply {
             hint = "输入类名片段或资源 ID 关键词"
-            singleLine = true
+            setSingleLine(true)
             textSize = 14f
             setPadding(dp(activity, 12), dp(activity, 10), dp(activity, 12), dp(activity, 10))
         }
