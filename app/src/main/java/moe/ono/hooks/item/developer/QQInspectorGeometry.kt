@@ -37,7 +37,16 @@ internal object QQInspectorGeometry {
         val imageTint: ColorStateList?,
         val text: CharSequence?,
         val textColors: ColorStateList?,
-        val textSizePx: Float
+        val textSizePx: Float,
+        val elevation: Float,
+        val translationZ: Float
+    )
+
+    private data class ContainerLayerState(
+        val translationZ: Float,
+        val clipChildren: Boolean,
+        val clipToPadding: Boolean,
+        val clipToOutline: Boolean
     )
 
     private data class MatchSignature(
@@ -61,6 +70,9 @@ internal object QQInspectorGeometry {
     }
 
     private val originals = WeakHashMap<View, Snapshot>()
+    private val elevatedContainers = WeakHashMap<ViewGroup, ContainerLayerState>()
+    private val visualOwners = WeakHashMap<View, List<ViewGroup>>()
+    private var visualOrderSerial = 0
     // A bounded strong map keeps rules alive while RecyclerView rows are detached/recycled.
     private val followRules = LinkedHashMap<View, FollowRule>()
 
@@ -89,13 +101,16 @@ internal object QQInspectorGeometry {
             imageTint = (view as? ImageView)?.imageTintList,
             text = textView?.text?.let(::SpannedString),
             textColors = textView?.textColors,
-            textSizePx = textView?.textSize ?: 0f
+            textSizePx = textView?.textSize ?: 0f,
+            elevation = view.elevation,
+            translationZ = view.translationZ
         )
     }
 
     @Synchronized
     fun beginEditing(view: View) {
         remember(view)
+        applyVisualPriority(view)
     }
 
     @Synchronized
@@ -118,6 +133,7 @@ internal object QQInspectorGeometry {
         val current = screenPosition(view)
         view.translationX += (left - current[0]).toFloat()
         view.translationY += (top - current[1]).toFloat()
+        applyVisualPriority(view)
         view.invalidate()
     }
 
@@ -127,6 +143,82 @@ internal object QQInspectorGeometry {
         params.height = height.coerceAtLeast(1)
         view.layoutParams = params
         view.requestLayout()
+    }
+
+    /**
+     * A translated child can be clipped by any ancestor ViewGroup and may remain
+     * underneath a sibling/overlay. Temporarily relax clipping on its ancestor
+     * chain and raise the edited branch in Android's Z ordering. Original values
+     * are stored once and restored when the last edited owner leaves that branch.
+     */
+    @Synchronized
+    private fun applyVisualPriority(view: View) {
+        if (view.parent == null) return
+        val density = view.resources.displayMetrics.density
+        val raisedZ = 64f * density
+        val ancestors = ArrayList<ViewGroup>(8)
+        var current = view.parent
+        val root = view.rootView
+        var depth = 0
+        while (current is ViewGroup && current !== root && depth++ < 32) {
+            val group = current
+            ancestors.add(group)
+            if (!elevatedContainers.containsKey(group)) {
+                elevatedContainers[group] = ContainerLayerState(
+                    translationZ = group.translationZ,
+                    clipChildren = group.clipChildren,
+                    clipToPadding = group.clipToPadding,
+                    clipToOutline = group.clipToOutline
+                )
+            }
+            group.clipChildren = false
+            group.clipToPadding = false
+            if (group.clipToOutline) group.clipToOutline = false
+            if (group.translationZ < raisedZ) group.translationZ = raisedZ
+            current = group.parent
+        }
+        visualOwners[view] = ancestors
+
+        // Keep edited controls above the host's original overlays while preserving
+        // their own elevation as much as possible. A tiny serial offset gives a
+        // deterministic order when two edited controls overlap.
+        visualOrderSerial = (visualOrderSerial + 1) % 1000
+        val orderingOffset = visualOrderSerial * 0.001f * density
+        view.translationZ = maxOf(view.translationZ, raisedZ + orderingOffset)
+        view.invalidate()
+    }
+
+    @Synchronized
+    private fun releaseVisualPriority(view: View) {
+        visualOwners.remove(view)
+        val stillUsed = visualOwners.values.flatten().toHashSet()
+        val noLongerUsed = elevatedContainers.keys.filter { it !in stillUsed }
+        noLongerUsed.forEach { group ->
+            val state = elevatedContainers.remove(group) ?: return@forEach
+            runCatching {
+                group.translationZ = state.translationZ
+                group.clipChildren = state.clipChildren
+                group.clipToPadding = state.clipToPadding
+                group.clipToOutline = state.clipToOutline
+                group.invalidate()
+            }
+        }
+    }
+
+    @Synchronized
+    private fun restoreAllVisualPriority() {
+        visualOwners.clear()
+        val entries = elevatedContainers.entries.map { it.key to it.value }
+        elevatedContainers.clear()
+        entries.forEach { (group, state) ->
+            runCatching {
+                group.translationZ = state.translationZ
+                group.clipChildren = state.clipChildren
+                group.clipToPadding = state.clipToPadding
+                group.clipToOutline = state.clipToOutline
+                group.invalidate()
+            }
+        }
     }
 
     @Synchronized
@@ -140,6 +232,9 @@ internal object QQInspectorGeometry {
         remember(second)
         moveToScreen(first, secondPosition[0], secondPosition[1])
         moveToScreen(second, firstPosition[0], firstPosition[1])
+        // Both branches must escape ancestor clipping and sit above their old siblings.
+        applyVisualPriority(first)
+        applyVisualPriority(second)
         applySameClassFollow(first)
         applySameClassFollow(second)
         true
@@ -176,6 +271,7 @@ internal object QQInspectorGeometry {
                         if (currentObserver.isAlive) currentObserver.removeOnGlobalLayoutListener(this)
                         if (replacement.parent != null) {
                             moveToScreen(replacement, targetPosition[0], targetPosition[1])
+                            applyVisualPriority(replacement)
                             applySameClassFollow(replacement)
                         }
                     }
@@ -187,6 +283,7 @@ internal object QQInspectorGeometry {
             root.post {
                 if (replacement.parent != null) {
                     moveToScreen(replacement, targetPosition[0], targetPosition[1])
+                    applyVisualPriority(replacement)
                     applySameClassFollow(replacement)
                 }
             }
@@ -213,6 +310,7 @@ internal object QQInspectorGeometry {
         val width = if (params.width > 0) params.width else view.width
         val height = if (params.height > 0) params.height else view.height
         resizeTo(view, width + dw, height + dh)
+        applyVisualPriority(view)
         applySameClassFollow(view)
         true
     }.getOrDefault(false)
@@ -336,6 +434,7 @@ internal object QQInspectorGeometry {
         val peers = rule.peerSnapshots.entries.map { it.key to it.value }
         peers.forEach { (peer, snapshot) ->
             runCatching {
+                releaseVisualPriority(peer)
                 restoreSnapshot(peer, snapshot)
                 peer.requestLayout()
                 peer.invalidate()
@@ -538,6 +637,9 @@ internal object QQInspectorGeometry {
                 }
                 if (touched) {
                     if (needsLayout) peer.requestLayout()
+                    if (sourceWidthChanged || sourceHeightChanged || abs(dx) > 0.05f || abs(dy) > 0.05f) {
+                        applyVisualPriority(peer)
+                    }
                     peer.invalidate()
                     changedCount++
                 }
@@ -567,6 +669,8 @@ internal object QQInspectorGeometry {
         view.translationY = saved.translationY
         view.scaleX = saved.scaleX
         view.scaleY = saved.scaleY
+        view.translationZ = saved.translationZ
+        view.elevation = saved.elevation
         view.alpha = saved.alpha
         view.visibility = saved.visibility
         view.requestLayout()
@@ -584,6 +688,7 @@ internal object QQInspectorGeometry {
     fun restore(view: View): Boolean {
         val saved = originals.remove(view) ?: return false
         cancelSameClassFollow(view)
+        releaseVisualPriority(view)
         return runCatching {
             restoreSnapshot(view, saved)
             true
@@ -595,6 +700,7 @@ internal object QQInspectorGeometry {
         clearAllSameClassFollows(restorePeers = false)
         val entries = originals.entries.map { it.key to it.value }
         originals.clear()
+        restoreAllVisualPriority()
         entries.forEach { (view, state) -> runCatching { restoreSnapshot(view, state) } }
         return entries.size
     }
