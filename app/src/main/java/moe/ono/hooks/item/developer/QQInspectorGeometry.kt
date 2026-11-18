@@ -82,8 +82,9 @@ internal object QQInspectorGeometry {
     }.getOrDefault(false)
 
     /**
-     * Visually replaces the target with the chosen view while retaining the target's
-     * layout slot as INVISIBLE. This keeps the host layout stable and allows exact undo.
+     * Replaces the target visually and in the parent's layout calculation.
+     * The original view remains attached as GONE so its exact state can be restored.
+     * A one-shot layout callback re-aligns the replacement after QQ reflows siblings.
      */
     @Synchronized
     fun replaceAtPosition(target: View, replacement: View): Boolean = runCatching {
@@ -97,9 +98,32 @@ internal object QQInspectorGeometry {
         remember(replacement)
         moveToScreen(replacement, targetPosition[0], targetPosition[1])
         resizeTo(replacement, targetWidth, targetHeight)
-        target.visibility = View.INVISIBLE
+        target.visibility = View.GONE
+        target.requestLayout()
         target.invalidate()
         replacement.invalidate()
+
+        val root = target.rootView
+        val observer = root.viewTreeObserver
+        if (observer.isAlive) {
+            val listener = object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
+                override fun onGlobalLayout() {
+                    runCatching {
+                        val currentObserver = root.viewTreeObserver
+                        if (currentObserver.isAlive) currentObserver.removeOnGlobalLayoutListener(this)
+                        if (replacement.parent != null) {
+                            moveToScreen(replacement, targetPosition[0], targetPosition[1])
+                        }
+                    }
+                }
+            }
+            observer.addOnGlobalLayoutListener(listener)
+            root.requestLayout()
+        } else {
+            root.post {
+                if (replacement.parent != null) moveToScreen(replacement, targetPosition[0], targetPosition[1])
+            }
+        }
         true
     }.getOrDefault(false)
 
