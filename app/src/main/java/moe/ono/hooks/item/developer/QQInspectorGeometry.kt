@@ -282,7 +282,7 @@ internal object QQInspectorGeometry {
         // Raise the actual control modestly, and only its direct content branch slightly.
         // InspectorOverlay uses a much higher elevation so it can never disappear under it.
         val priority = 8f * density
-        raisedViews.putIfAbsent(view, view.translationZ)
+        if (!raisedViews.containsKey(view)) raisedViews[view] = view.translationZ
         visualPriorities[view] = priority
         view.translationZ = maxOf(view.translationZ, priority)
 
@@ -295,7 +295,7 @@ internal object QQInspectorGeometry {
                 parent = branch.parent
             }
             if (branch !== view && branch.parent === content) {
-                raisedViews.putIfAbsent(branch, branch.translationZ)
+                if (!raisedViews.containsKey(branch)) raisedViews[branch] = branch.translationZ
                 branch.translationZ = maxOf(branch.translationZ, 4f * density)
                 raisedViewOwners[view] = listOf(view, branch)
             } else {
