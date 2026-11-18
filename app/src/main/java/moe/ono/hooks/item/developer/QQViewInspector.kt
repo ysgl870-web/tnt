@@ -2585,6 +2585,17 @@ private class InspectorOverlay private constructor(
         private var onSelected: ((InspectorNode) -> Unit)? = null
         private var pickMode = false
         private var multiSelect = false
+        private var editTarget: View? = null
+        private var editMode = false
+        private var editDragging = false
+        private var editResizing = false
+        private var editLastRawX = 0f
+        private var editLastRawY = 0f
+        private var onEditFinished: (() -> Unit)? = null
+        private val editHandlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFFFFC857.toInt()
+            style = Paint.Style.FILL
+        }
         private val selectedViews = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<View, Boolean>())
         private var onSelectionChanged: ((Set<View>) -> Unit)? = null
         private val sweepPaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -2614,10 +2625,26 @@ private class InspectorOverlay private constructor(
 
         fun setPickMode(enabled: Boolean) {
             pickMode = enabled
-            isClickable = enabled
-            isFocusable = enabled
+            isClickable = enabled || editMode
+            isFocusable = enabled || editMode
             pressedNode = null
         }
+
+        fun setEditTarget(target: View?) {
+            editTarget = target
+            editMode = target != null
+            editDragging = false
+            isClickable = pickMode || editMode
+            isFocusable = pickMode || editMode
+            invalidate()
+        }
+
+        fun setOnEditFinished(listener: () -> Unit) {
+            onEditFinished = listener
+        }
+
+        fun containsEditPoint(target: View, screenX: Int, screenY: Int): Boolean =
+            QQInspectorGeometry.currentBounds(target)?.contains(screenX, screenY) == true
 
         fun setNodes(value: List<InspectorNode>) {
             nodes = value
@@ -2650,11 +2677,13 @@ private class InspectorOverlay private constructor(
                 canvas.drawLine(0f, y, width.toFloat(), y, sweepPaint)
             }
             drawnNodes.forEachIndexed { index, node ->
+                val current = if (node.view === editTarget) QQInspectorGeometry.currentBounds(node.view) else null
+                val currentBounds = current ?: node.bounds
                 val rect = RectF(
-                    (node.bounds.left - screenLeft).toFloat(),
-                    (node.bounds.top - screenTop).toFloat(),
-                    (node.bounds.right - screenLeft).toFloat(),
-                    (node.bounds.bottom - screenTop).toFloat()
+                    (currentBounds.left - screenLeft).toFloat(),
+                    (currentBounds.top - screenTop).toFloat(),
+                    (currentBounds.right - screenLeft).toFloat(),
+                    (currentBounds.bottom - screenTop).toFloat()
                 )
                 val selected = node.view in selectedViews
                 borderPaint.color = when { selected -> 0xFFFFB020.toInt(); node.view is ImageView || node.imageLinks.isNotEmpty() -> 0xFF22C9D8.toInt(); else -> 0xFF168DDE.toInt() }
@@ -2673,6 +2702,27 @@ private class InspectorOverlay private constructor(
                     canvas.drawText(label, labelRect.left + dp(context, 4), labelRect.bottom - dp(context, 4).toFloat(), numberPaint)
                 }
             }
+            editTarget?.let { target ->
+                QQInspectorGeometry.currentBounds(target)?.let { bounds ->
+                    val rect = RectF(
+                        (bounds.left - screenLeft).toFloat(),
+                        (bounds.top - screenTop).toFloat(),
+                        (bounds.right - screenLeft).toFloat(),
+                        (bounds.bottom - screenTop).toFloat()
+                    )
+                    borderPaint.style = Paint.Style.STROKE
+                    borderPaint.color = 0xFFFFC857.toInt()
+                    borderPaint.strokeWidth = dp(context, 2).toFloat()
+                    borderPaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(dp(context, 7).toFloat(), dp(context, 4).toFloat()), 0f)
+                    canvas.drawRoundRect(rect, dp(context, 5).toFloat(), dp(context, 5).toFloat(), borderPaint)
+                    borderPaint.pathEffect = null
+                    val handle = dp(context, 7).toFloat()
+                    listOf(
+                        rect.left to rect.top, rect.right to rect.top,
+                        rect.left to rect.bottom, rect.right to rect.bottom
+                    ).forEach { (hx, hy) -> canvas.drawCircle(hx, hy, handle, editHandlePaint) }
+                }
+            }
         }
 
         private fun hitNode(x: Int, y: Int): InspectorNode? =
@@ -2680,7 +2730,53 @@ private class InspectorOverlay private constructor(
                 .filter { it.bounds.contains(x, y) }
                 .minWithOrNull(compareBy<InspectorNode> { it.area }.thenByDescending { it.depth })
 
+        private fun handleEditTouch(event: MotionEvent): Boolean {
+            val target = editTarget ?: return false
+            val bounds = QQInspectorGeometry.currentBounds(target) ?: return false
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    val x = event.rawX.toInt()
+                    val y = event.rawY.toInt()
+                    if (!bounds.contains(x, y)) return false
+                    editDragging = true
+                    val corner = dp(context, 24)
+                    editResizing = x >= bounds.right - corner && y >= bounds.bottom - corner
+                    editLastRawX = event.rawX
+                    editLastRawY = event.rawY
+                    parent?.requestDisallowInterceptTouchEvent(true)
+                    return true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (!editDragging) return false
+                    val dx = (event.rawX - editLastRawX).toInt()
+                    val dy = (event.rawY - editLastRawY).toInt()
+                    if (dx != 0 || dy != 0) {
+                        if (editResizing) QQInspectorGeometry.resizeBy(target, dx, dy)
+                        else QQInspectorGeometry.moveBy(target, dx, dy)
+                        editLastRawX = event.rawX
+                        editLastRawY = event.rawY
+                        invalidate()
+                    }
+                    return true
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (!editDragging) return false
+                    editDragging = false
+                    parent?.requestDisallowInterceptTouchEvent(false)
+                    onEditFinished?.invoke()
+                    return true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    editDragging = false
+                    parent?.requestDisallowInterceptTouchEvent(false)
+                    return false
+                }
+            }
+            return editDragging
+        }
+
         override fun onTouchEvent(event: MotionEvent): Boolean {
+            if (editMode) return handleEditTouch(event)
             if (!pickMode) {
                 pressedNode = null
                 return false
