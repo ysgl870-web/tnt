@@ -1338,7 +1338,8 @@ private class InspectorOverlay private constructor(
                 y >= panelHandle.top + panelHandle.translationY &&
                 y <= panelHandle.bottom + panelHandle.translationY
             val inEditTarget = positionEditTarget?.let { boxes.containsEditPoint(it, event.rawX.toInt(), event.rawY.toInt()) } == true
-            if (!inPanel && !inHandle && !pickMode && !inEditTarget) {
+            val selectingControl = pickMode && boxes.hasPickableNode(event.rawX.toInt(), event.rawY.toInt())
+            if (!inPanel && !inHandle && !inEditTarget && !selectingControl) {
                 close()
                 return true
             }
@@ -2682,6 +2683,8 @@ private class InspectorOverlay private constructor(
         private var editMode = false
         private var editDragging = false
         private var editResizing = false
+        private var editResizeLeft = false
+        private var editResizeTop = false
         private var editLastRawX = 0f
         private var editLastRawY = 0f
         private var onEditFinished: (() -> Unit)? = null
@@ -2743,6 +2746,9 @@ private class InspectorOverlay private constructor(
 
         fun containsEditPoint(target: View, screenX: Int, screenY: Int): Boolean =
             QQInspectorGeometry.currentBounds(target)?.contains(screenX, screenY) == true
+
+        fun hasPickableNode(screenX: Int, screenY: Int): Boolean =
+            hitNode(screenX, screenY) != null
 
         fun setNodes(value: List<InspectorNode>) {
             nodes = value
@@ -2838,8 +2844,14 @@ private class InspectorOverlay private constructor(
                     val y = event.rawY.toInt()
                     if (!bounds.contains(x, y)) return false
                     editDragging = true
-                    val corner = dp(context, 24)
-                    editResizing = x >= bounds.right - corner && y >= bounds.bottom - corner
+                    val corner = dp(context, 26)
+                    val nearLeft = x <= bounds.left + corner
+                    val nearRight = x >= bounds.right - corner
+                    val nearTop = y <= bounds.top + corner
+                    val nearBottom = y >= bounds.bottom - corner
+                    editResizeLeft = nearLeft && !nearRight
+                    editResizeTop = nearTop && !nearBottom
+                    editResizing = (nearLeft || nearRight) && (nearTop || nearBottom)
                     editLastRawX = event.rawX
                     editLastRawY = event.rawY
                     parent?.requestDisallowInterceptTouchEvent(true)
@@ -2850,8 +2862,20 @@ private class InspectorOverlay private constructor(
                     val dx = (event.rawX - editLastRawX).toInt()
                     val dy = (event.rawY - editLastRawY).toInt()
                     if (dx != 0 || dy != 0) {
-                        if (editResizing) QQInspectorGeometry.resizeBy(target, dx, dy)
-                        else QQInspectorGeometry.moveBy(target, dx, dy)
+                        if (editResizing) {
+                            val widthDelta = if (editResizeLeft) -dx else dx
+                            val heightDelta = if (editResizeTop) -dy else dy
+                            QQInspectorGeometry.resizeBy(target, widthDelta, heightDelta)
+                            if (editResizeLeft || editResizeTop) {
+                                QQInspectorGeometry.moveBy(
+                                    target,
+                                    if (editResizeLeft) dx else 0,
+                                    if (editResizeTop) dy else 0
+                                )
+                            }
+                        } else {
+                            QQInspectorGeometry.moveBy(target, dx, dy)
+                        }
                         editLastRawX = event.rawX
                         editLastRawY = event.rawY
                         invalidate()
