@@ -68,6 +68,7 @@ internal object QQInspectorGeometry {
     ) {
         val peerSnapshots = WeakHashMap<View, Snapshot>()
         var applying = false
+        var lastApplyAt = 0L
         lateinit var listener: ViewTreeObserver.OnGlobalLayoutListener
     }
 
@@ -533,6 +534,9 @@ internal object QQInspectorGeometry {
                 // The source may be temporarily detached by a recycled list row. Keep using
                 // its last user-edited profile and apply it to newly-created matching rows.
                 if (!root.isAttachedToWindow) return
+                val now = android.os.SystemClock.uptimeMillis()
+                if (now - rule.lastApplyAt < 280L) return
+                rule.lastApplyAt = now
                 applyRule(rule)
             }
         }
