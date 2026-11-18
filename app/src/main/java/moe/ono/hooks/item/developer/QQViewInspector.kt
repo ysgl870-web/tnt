@@ -305,6 +305,8 @@ private fun copyText(context: Context, label: String, value: String) {
 private object QQInspectorRuntime {
     @Volatile private var installed = false
     private const val BUTTON_TAG = "tnt.qq.inspector.entry"
+    private const val PANEL_OPEN_KEY = "tnt_qq_inspector_panel_open_v1"
+    @Volatile private var lastActivity = java.lang.ref.WeakReference<Activity>(null)
 
     fun install() {
         if (installed) return
@@ -327,6 +329,7 @@ private object QQInspectorRuntime {
                                 InspectorControlState.applyPersistent(activity)
                                 attach(activity)
                             } else {
+                                setPanelOpen(false)
                                 detach(activity)
                             }
                         }.onFailure {
@@ -336,7 +339,10 @@ private object QQInspectorRuntime {
                     override fun onActivityPaused(activity: Activity) = Unit
                     override fun onActivityStopped(activity: Activity) = Unit
                     override fun onActivitySaveInstanceState(activity: Activity, state: Bundle) = Unit
-                    override fun onActivityDestroyed(activity: Activity) = Unit
+                    override fun onActivityDestroyed(activity: Activity) {
+                        removeOverlayOnly(activity)
+                        if (lastActivity.get() === activity) lastActivity.clear()
+                    }
                 })
                 installed = true
             } catch (error: Throwable) {
@@ -349,22 +355,64 @@ private object QQInspectorRuntime {
         ConfigManager.getDefaultConfig().getBooleanOrFalse(Constants.PrekXXX + "黑壳区/控件探测器")
     }.getOrDefault(false)
 
+    fun isPanelOpen(): Boolean = runCatching {
+        ConfigManager.getDefaultConfig().getBooleanOrFalse(PANEL_OPEN_KEY)
+    }.getOrDefault(false)
+
+    fun setPanelOpen(open: Boolean) {
+        runCatching {
+            ConfigManager.getDefaultConfig().edit().putBoolean(PANEL_OPEN_KEY, open).apply()
+        }.onFailure { Logger.w("TNT inspector panel state save failed: " + it.javaClass.simpleName) }
+    }
+
+    private fun removeOverlayOnly(activity: Activity) {
+        runCatching {
+            val content = activity.findViewById<ViewGroup>(android.R.id.content) ?: return
+            for (index in content.childCount - 1 downTo 0) {
+                if (content.getChildAt(index) is InspectorOverlay) content.removeViewAt(index)
+            }
+        }
+    }
+
     fun detach(activity: Activity) {
         // Keep user-applied changes when the probe is closed or disabled.
-        val content = activity.findViewById<ViewGroup>(android.R.id.content) ?: return
+        removeOverlayOnly(activity)
+        val content = runCatching { activity.findViewById<ViewGroup>(android.R.id.content) }.getOrNull() ?: return
         for (index in content.childCount - 1 downTo 0) {
-            val child = content.getChildAt(index)
-            if (child is InspectorOverlay || child.tag == BUTTON_TAG) content.removeViewAt(index)
+            if (content.getChildAt(index).tag == BUTTON_TAG) content.removeViewAt(index)
         }
+        if (lastActivity.get() === activity) lastActivity.clear()
     }
 
     fun attach(activity: Activity) {
         if (!isEnabled() || activity.isFinishing || activity.isDestroyed) return
-        val pkg = runCatching { activity.packageName }.getOrDefault("")
+        val pkg = runCatching { activity.applicationContext.packageName }.getOrDefault(activity.packageName)
         if (pkg != "com.tencent.mobileqq" && pkg != "com.tencent.tim") return
         if (activity.javaClass.name.startsWith("moe.ono.")) return
+
+        val previous = lastActivity.get()
+        if (previous != null && previous !== activity && !previous.isDestroyed) {
+            removeOverlayOnly(previous)
+            val oldRoot = runCatching { previous.findViewById<ViewGroup>(android.R.id.content) }.getOrNull()
+            oldRoot?.let { root ->
+                for (index in root.childCount - 1 downTo 0) {
+                    if (root.getChildAt(index).tag == BUTTON_TAG) root.removeViewAt(index)
+                }
+            }
+        }
+        lastActivity = java.lang.ref.WeakReference(activity)
+
         val content = activity.findViewById<ViewGroup>(android.R.id.content) ?: return
-        if (content.findViewWithTag<View>(BUTTON_TAG) != null) return
+        val existingOverlay = (0 until content.childCount).any { content.getChildAt(it) is InspectorOverlay }
+        val existingButton = content.findViewWithTag<View>(BUTTON_TAG)
+
+        if (isPanelOpen()) {
+            if (existingButton != null) content.removeView(existingButton)
+            if (!existingOverlay) InspectorOverlay.open(activity)
+            return
+        }
+        if (existingOverlay) removeOverlayOnly(activity)
+        if (existingButton != null) return
 
         val button = InspectorEntryView(activity) {
             InspectorOverlay.open(activity)
