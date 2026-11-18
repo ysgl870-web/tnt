@@ -1843,6 +1843,10 @@ private class InspectorOverlay private constructor(
                 boxes.setPickAnyControl(false)
             }
             if (positionEditTarget != null) {
+                positionEditTarget?.let {
+                    QQInspectorGeometry.finishEditing(it)
+                    QQInspectorPersistentControls.save(activity, it)
+                }
                 positionEditTarget = null
                 boxes.setEditTarget(null)
             }
@@ -2744,6 +2748,10 @@ private class InspectorOverlay private constructor(
 
     private fun disableFeature() {
         runSafely {
+            positionEditTarget?.let {
+                QQInspectorGeometry.finishEditing(it)
+                QQInspectorPersistentControls.save(activity, it)
+            }
             QQInspectorRuntime.setPanelOpen(false)
             ConfigManager.getDefaultConfig().edit()
                 .putBoolean(Constants.PrekXXX + "黑壳区/控件探测器", false)
