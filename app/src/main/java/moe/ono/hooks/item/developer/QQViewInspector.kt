@@ -2708,8 +2708,8 @@ private class InspectorOverlay private constructor(
             nodes = value
             val minArea = (dp(context, 9) * dp(context, 9)).toLong()
             drawnNodes = value.filter {
-                it.area >= minArea && (it.view is ImageView || it.clickable || it.longClickable || it.directLinks.isNotEmpty() ||
-                    it.imageLinks.isNotEmpty() || (it.focusable && it.childCount == 0))
+                it.view === editTarget || (it.area >= minArea && (it.view is ImageView || it.clickable || it.longClickable ||
+                    it.directLinks.isNotEmpty() || it.imageLinks.isNotEmpty() || (it.focusable && it.childCount == 0)))
             }.take(120)
             invalidate()
         }
