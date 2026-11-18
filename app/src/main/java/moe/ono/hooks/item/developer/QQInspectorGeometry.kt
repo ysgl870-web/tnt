@@ -13,6 +13,7 @@ import android.widget.TextView
 import java.util.WeakHashMap
 import java.util.LinkedHashMap
 import kotlin.math.abs
+import android.os.SystemClock
 import org.json.JSONObject
 
 /**
@@ -113,6 +114,7 @@ internal object QQInspectorGeometry {
     @Synchronized
     fun beginEditing(view: View) {
         remember(view)
+        applyVisualPriority(view)
     }
 
     /** Finalize one gesture: expensive sibling synchronization and z-order work happens once. */
@@ -623,7 +625,7 @@ internal object QQInspectorGeometry {
         val matches = ArrayList<View>()
         var visited = 0
         fun walk(view: View, depth: Int) {
-            if (visited >= 1400 || depth > 36 || matches.size >= 96) return
+            if (visited >= 520 || depth > 32 || matches.size >= 48) return
             visited++
             if (view !== root && matches(view, signature) && view.isAttachedToWindow &&
                 view.visibility == View.VISIBLE && view.alpha > 0.03f &&
