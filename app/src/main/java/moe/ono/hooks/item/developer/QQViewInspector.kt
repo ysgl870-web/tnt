@@ -3046,6 +3046,7 @@ internal object QQInspectorLinks {
     fun captureActivity(activity: Activity): List<String> {
         if (!enabled()) return emptyList()
         val found = LinkedHashSet<String>()
+        val historyEntries = ArrayList<LinkEntry>(128)
         val parentUrl = currentPageUrl(activity)
         found.addAll(extractIntent(activity.intent, activity.javaClass.simpleName, parentUrl))
         val root = runCatching { activity.findViewById<ViewGroup>(android.R.id.content) }.getOrNull()
@@ -3065,7 +3066,7 @@ internal object QQInspectorLinks {
                             ?.invoke(view)?.toString()
                     }.getOrNull()
                     if (!raw.isNullOrBlank()) {
-                        add("ACTIVITY_WEBVIEW", raw, activity.javaClass.simpleName + "/" + className, parentUrl = parentUrl)
+                        historyEntries.add(LinkEntry("ACTIVITY_WEBVIEW", raw, activity.javaClass.simpleName + "/" + className, parentUrl = parentUrl))
                         sanitize(raw)?.let(found::add)
                     }
                 }
@@ -3074,7 +3075,7 @@ internal object QQInspectorLinks {
                 val content = rawValue?.trim().orEmpty()
                 if (content.isBlank() || content.length > 120_000) return
                 extractUrls(content).take(20).forEach { url ->
-                    add("VIEW_TEXT", url, activity.javaClass.simpleName + "/$className/$source", parentUrl = parentUrl)
+                    historyEntries.add(LinkEntry("VIEW_TEXT", url, activity.javaClass.simpleName + "/$className/$source", parentUrl = parentUrl))
                     sanitize(url)?.let(found::add)
                 }
                 if ((content.startsWith("{") || content.startsWith("[")) && content.length >= 8) {
@@ -3084,8 +3085,10 @@ internal object QQInspectorLinks {
                         "(ark|appid|jumpUrl|qqdocurl|schema|share|meta|prompt|title.*url|url.*title)"
                     )
                     if (isJson && looksLikeCard) {
-                        add("CARD_JSON_VIEW", content, activity.javaClass.simpleName + "/$className/$source",
-                            full = true, parentUrl = parentUrl)
+                        historyEntries.add(
+                            LinkEntry("CARD_JSON_VIEW", content, activity.javaClass.simpleName + "/$className/$source",
+                                full = true, parentUrl = parentUrl)
+                        )
                     }
                 }
             }
@@ -3094,7 +3097,7 @@ internal object QQInspectorLinks {
             inspectUrlModel(view.tag, "$className.tag") { value, source ->
                 val raw = (value as? String)?.trim().orEmpty()
                 if (looksLikeLink(raw)) {
-                    add("VIEW_MODEL_LINK", raw, "$className/$source", parentUrl = parentUrl)
+                    historyEntries.add(LinkEntry("VIEW_MODEL_LINK", raw, "$className/$source", parentUrl = parentUrl))
                     sanitize(raw)?.let(found::add)
                 }
             }
@@ -3108,6 +3111,7 @@ internal object QQInspectorLinks {
             }
         }
         root?.let(::walk)
+        addBatch(historyEntries)
         return found.toList()
     }
 
