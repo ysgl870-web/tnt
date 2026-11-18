@@ -3504,7 +3504,12 @@ internal object QQInspectorLinks {
         val previewView: View? = null
     )
 
-    private val imageViewRefs = LinkedHashMap<String, WeakReference<View>>()
+    private data class ImagePreviewRef(
+        val view: WeakReference<ImageView>,
+        val drawable: WeakReference<android.graphics.drawable.Drawable>
+    )
+
+    private val imageViewRefs = LinkedHashMap<String, ImagePreviewRef>()
 
     fun add(
         kind: String,
@@ -3520,8 +3525,11 @@ internal object QQInspectorLinks {
     }
 
     fun findImagePreview(raw: String): android.graphics.drawable.Drawable? = runCatching {
-        val view = synchronized(lock) { imageViewRefs[raw]?.get() }
-        (view as? ImageView)?.drawable
+        val reference = synchronized(lock) { imageViewRefs[raw] }
+        val view = reference?.view?.get() ?: return null
+        val drawable = reference.drawable.get() ?: return null
+        if (!view.isAttachedToWindow || !view.isShown || view.drawable !== drawable) return null
+        drawable
     }.getOrNull()
 
     /**
@@ -3533,9 +3541,15 @@ internal object QQInspectorLinks {
         val now = System.currentTimeMillis()
         val prepared = ArrayList<Array<Any>>(entries.size)
         for (entry in entries) {
-            if (entry.previewView != null && isImageKind(entry.kind)) synchronized(lock) {
-                imageViewRefs[entry.raw] = WeakReference(entry.previewView)
-                while (imageViewRefs.size > 120) imageViewRefs.remove(imageViewRefs.keys.first())
+            if (entry.previewView is ImageView && isImageKind(entry.kind)) {
+                val drawable = entry.previewView.drawable
+                if (drawable != null) synchronized(lock) {
+                    imageViewRefs[entry.raw] = ImagePreviewRef(
+                        WeakReference(entry.previewView),
+                        WeakReference(drawable)
+                    )
+                    while (imageViewRefs.size > 120) imageViewRefs.remove(imageViewRefs.keys.first())
+                }
             }
             val cardPayload = isCardPayloadKind(entry.kind)
             val sanitized = if (cardPayload) validateCardPayload(entry.raw) else sanitize(entry.raw)
