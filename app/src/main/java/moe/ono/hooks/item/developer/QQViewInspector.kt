@@ -2782,8 +2782,11 @@ private class InspectorOverlay private constructor(
         }
 
         fun setPickAnyControl(enabled: Boolean) {
+            if (pickAnyControl == enabled) return
             pickAnyControl = enabled
-            invalidate()
+            // Rebuild the hit-test/draw list immediately; invalidation alone would
+            // leave the previous clickable-only subset in place.
+            setNodes(nodes)
         }
 
         fun setEditTarget(target: View?) {
