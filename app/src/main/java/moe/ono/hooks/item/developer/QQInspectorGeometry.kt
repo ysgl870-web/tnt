@@ -10,8 +10,8 @@ import android.view.ViewGroup
 import android.view.ViewTreeObserver
 import android.widget.ImageView
 import android.widget.TextView
-import java.lang.ref.WeakReference
 import java.util.WeakHashMap
+import java.util.LinkedHashMap
 import kotlin.math.abs
 
 /**
@@ -49,20 +49,20 @@ internal object QQInspectorGeometry {
     )
 
     private class FollowRule(
-        source: View,
-        root: ViewGroup,
+        val source: View,
+        val root: ViewGroup,
         val signature: MatchSignature,
-        val sourceBase: Snapshot
+        val sourceBase: Snapshot,
+        var profile: Snapshot
     ) {
-        val source = WeakReference(source)
-        val root = WeakReference(root)
         val peerSnapshots = WeakHashMap<View, Snapshot>()
         var applying = false
         lateinit var listener: ViewTreeObserver.OnGlobalLayoutListener
     }
 
     private val originals = WeakHashMap<View, Snapshot>()
-    private val followRules = WeakHashMap<View, FollowRule>()
+    // A bounded strong map keeps rules alive while RecyclerView rows are detached/recycled.
+    private val followRules = LinkedHashMap<View, FollowRule>()
 
     private fun resourceName(view: View): String = if (view.id != View.NO_ID) {
         runCatching { view.resources.getResourceName(view.id) }
@@ -276,12 +276,15 @@ internal object QQInspectorGeometry {
     @Synchronized
     fun applySameClassFollow(view: View): Int {
         val rule = followRules[view] ?: return 0
+        // Only explicit editor/geometry actions refresh the profile. Global layout callbacks
+        // reuse this snapshot so QQ recycling cannot accidentally copy a new user's text.
+        if (view.parent != null && view.isAttachedToWindow) rule.profile = capture(view)
         return applyRule(rule)
     }
 
     @Synchronized
     fun enableSameClassFollow(view: View): Int {
-        if (view.parent == null || view.windowToken == null) return -1
+        if (view.parent == null || !view.isAttachedToWindow) return -1
         remember(view)
         val root = view.rootView as? ViewGroup ?: return -1
         val signature = signatureOf(view) ?: return -1
@@ -290,15 +293,17 @@ internal object QQInspectorGeometry {
         followRules.entries.toList().forEach { (existingView, existingRule) ->
             if (existingRule.signature == signature) cancelSameClassFollow(existingView)
         }
+        while (followRules.size >= 24) {
+            followRules.keys.firstOrNull()?.let(::cancelSameClassFollow) ?: break
+        }
 
         val sourceBase = originals[view] ?: capture(view)
-        val rule = FollowRule(view, root, signature, sourceBase)
+        val rule = FollowRule(view, root, signature, sourceBase, capture(view))
         rule.listener = object : ViewTreeObserver.OnGlobalLayoutListener {
             override fun onGlobalLayout() {
-                if (rule.source.get()?.parent == null || rule.root.get() == null) {
-                    removeRuleListener(rule)
-                    return
-                }
+                // The source may be temporarily detached by a recycled list row. Keep using
+                // its last user-edited profile and apply it to newly-created matching rows.
+                if (!root.isAttachedToWindow) return
                 applyRule(rule)
             }
         }
@@ -416,35 +421,36 @@ internal object QQInspectorGeometry {
 
     private fun applyRule(rule: FollowRule): Int {
         if (rule.applying) return 0
-        val source = rule.source.get() ?: return 0
-        val root = rule.root.get() ?: return 0
-        if (source.parent == null || source.rootView !== root) return 0
+        val source = rule.source
+        val root = rule.root
+        if (!root.isAttachedToWindow) return 0
         rule.applying = true
         var changedCount = 0
         try {
             val base = rule.sourceBase
-            val dx = source.translationX - base.translationX
-            val dy = source.translationY - base.translationY
-            val sourceWidthChanged = layoutWidth(source) != base.layoutWidth
-            val sourceHeightChanged = layoutHeight(source) != base.layoutHeight
-            val sourceWidth = if (layoutWidth(source) > 0) layoutWidth(source) else source.width
-            val sourceHeight = if (layoutHeight(source) > 0) layoutHeight(source) else source.height
-            val scaleXChanged = abs(source.scaleX - base.scaleX) > 0.001f
-            val scaleYChanged = abs(source.scaleY - base.scaleY) > 0.001f
-            val alphaChanged = abs(source.alpha - base.alpha) > 0.001f
-            val sourceText = (source as? TextView)
-            val baseTextChanged = sourceText != null && sourceText.text?.toString() != base.text?.toString()
-            val sourceTextColorChanged = sourceText != null && !sameColorState(sourceText.textColors, base.textColors)
-            val sourceTextSizeChanged = sourceText != null && abs(sourceText.textSize - base.textSizePx) > 0.5f
-            val sourceBackgroundTintChanged = !sameColorState(source.backgroundTintList, base.backgroundTint)
-            val sourceBackgroundColor = (source.background as? ColorDrawable)?.color
+            val profile = rule.profile
+            val dx = profile.translationX - base.translationX
+            val dy = profile.translationY - base.translationY
+            val sourceWidthChanged = profile.layoutWidth != base.layoutWidth
+            val sourceHeightChanged = profile.layoutHeight != base.layoutHeight
+            val sourceWidth = if (profile.layoutWidth > 0) profile.layoutWidth else profile.measuredWidth
+            val sourceHeight = if (profile.layoutHeight > 0) profile.layoutHeight else profile.measuredHeight
+            val scaleXChanged = abs(profile.scaleX - base.scaleX) > 0.001f
+            val scaleYChanged = abs(profile.scaleY - base.scaleY) > 0.001f
+            val alphaChanged = abs(profile.alpha - base.alpha) > 0.001f
+            val sourceIsText = source is TextView
+            val sourceTextChanged = sourceIsText && profile.text?.toString() != base.text?.toString()
+            val sourceTextColorChanged = sourceIsText && !sameColorState(profile.textColors, base.textColors)
+            val sourceTextSizeChanged = sourceIsText && abs(profile.textSizePx - base.textSizePx) > 0.5f
+            val sourceBackgroundTintChanged = !sameColorState(profile.backgroundTint, base.backgroundTint)
+            val sourceBackgroundColor = (profile.background as? ColorDrawable)?.color
             val sourceBackgroundColorChanged = sourceBackgroundColor != base.background?.let { (it as? ColorDrawable)?.color }
-            val sourceImageTint = (source as? ImageView)?.imageTintList
-            val sourceImageTintChanged = source is ImageView && !sameColorState(sourceImageTint, base.imageTint)
+            val sourceIsImage = source is ImageView
+            val sourceImageTintChanged = sourceIsImage && !sameColorState(profile.imageTint, base.imageTint)
 
             val peers = collectMatching(root, rule.signature)
             peers.forEach { peer ->
-                if (peer === source || peer.rootView !== source.rootView) return@forEach
+                if (peer === source || peer.rootView !== root) return@forEach
                 if (peer.layoutParams != null && source.layoutParams != null &&
                     peer.layoutParams!!::class.java != source.layoutParams!!::class.java
                 ) return@forEach
@@ -452,6 +458,7 @@ internal object QQInspectorGeometry {
                 remember(peer)
                 val peerBase = rule.peerSnapshots.getOrPut(peer) { capture(peer) }
                 var touched = false
+                var needsLayout = false
                 if (abs(dx) > 0.05f) {
                     val targetX = peerBase.translationX + dx
                     if (abs(peer.translationX - targetX) > 0.05f) {
@@ -469,31 +476,31 @@ internal object QQInspectorGeometry {
                 if (sourceWidthChanged && peer.layoutParams != null && sourceWidth > 0) {
                     if (layoutWidth(peer) != sourceWidth) {
                         peer.layoutParams.width = sourceWidth
-                        peer.requestLayout()
                         touched = true
+                        needsLayout = true
                     }
                 }
                 if (sourceHeightChanged && peer.layoutParams != null && sourceHeight > 0) {
                     if (layoutHeight(peer) != sourceHeight) {
                         peer.layoutParams.height = sourceHeight
-                        peer.requestLayout()
                         touched = true
+                        needsLayout = true
                     }
                 }
-                if (scaleXChanged && abs(peer.scaleX - source.scaleX) > 0.001f) {
-                    peer.scaleX = source.scaleX
+                if (scaleXChanged && abs(peer.scaleX - profile.scaleX) > 0.001f) {
+                    peer.scaleX = profile.scaleX
                     touched = true
                 }
-                if (scaleYChanged && abs(peer.scaleY - source.scaleY) > 0.001f) {
-                    peer.scaleY = source.scaleY
+                if (scaleYChanged && abs(peer.scaleY - profile.scaleY) > 0.001f) {
+                    peer.scaleY = profile.scaleY
                     touched = true
                 }
-                if (alphaChanged && abs(peer.alpha - source.alpha) > 0.001f) {
-                    peer.alpha = source.alpha
+                if (alphaChanged && abs(peer.alpha - profile.alpha) > 0.001f) {
+                    peer.alpha = profile.alpha
                     touched = true
                 }
-                if (sourceBackgroundTintChanged && !sameColorState(peer.backgroundTintList, source.backgroundTintList)) {
-                    peer.backgroundTintList = source.backgroundTintList
+                if (sourceBackgroundTintChanged && !sameColorState(peer.backgroundTintList, profile.backgroundTint)) {
+                    peer.backgroundTintList = profile.backgroundTint
                     touched = true
                 }
                 if (sourceBackgroundColorChanged && sourceBackgroundColor != null) {
@@ -507,25 +514,30 @@ internal object QQInspectorGeometry {
                         touched = true
                     }
                 }
-                if (sourceImageTintChanged && peer is ImageView && !sameColorState(peer.imageTintList, sourceImageTint)) {
-                    peer.imageTintList = sourceImageTint
+                if (sourceImageTintChanged && peer is ImageView &&
+                    !sameColorState(peer.imageTintList, profile.imageTint)
+                ) {
+                    peer.imageTintList = profile.imageTint
                     touched = true
                 }
-                if (sourceText != null && peer is TextView) {
-                    if (baseTextChanged && peer.text?.toString() != sourceText.text?.toString()) {
-                        peer.text = sourceText.text
+                if (sourceIsText && peer is TextView) {
+                    if (sourceTextChanged && peer.text?.toString() != profile.text?.toString()) {
+                        peer.text = profile.text
+                        touched = true
+                        needsLayout = true
+                    }
+                    if (sourceTextColorChanged && !sameColorState(peer.textColors, profile.textColors)) {
+                        profile.textColors?.let(peer::setTextColor)
                         touched = true
                     }
-                    if (sourceTextColorChanged && !sameColorState(peer.textColors, sourceText.textColors)) {
-                        peer.setTextColor(sourceText.textColors)
+                    if (sourceTextSizeChanged && abs(peer.textSize - profile.textSizePx) > 0.5f) {
+                        peer.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, profile.textSizePx)
                         touched = true
-                    }
-                    if (sourceTextSizeChanged && abs(peer.textSize - sourceText.textSize) > 0.5f) {
-                        peer.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, sourceText.textSize)
-                        touched = true
+                        needsLayout = true
                     }
                 }
                 if (touched) {
+                    if (needsLayout) peer.requestLayout()
                     peer.invalidate()
                     changedCount++
                 }
