@@ -3461,7 +3461,8 @@ internal object QQInspectorLinks {
         val source: String,
         val full: Boolean = false,
         val parentUrl: String? = null,
-        val location: String? = null
+        val location: String? = null,
+        val previewView: View? = null
     )
 
     private val imageViewRefs = LinkedHashMap<String, WeakReference<View>>()
@@ -3476,11 +3477,7 @@ internal object QQInspectorLinks {
         location: String? = null,
         previewView: View? = null
     ) {
-        if (previewView != null && isImageKind(kind)) synchronized(lock) {
-            imageViewRefs[raw] = WeakReference(previewView)
-            while (imageViewRefs.size > 120) imageViewRefs.remove(imageViewRefs.keys.first())
-        }
-        addBatch(listOf(LinkEntry(kind, raw, source, full, parentUrl, location)), force)
+        addBatch(listOf(LinkEntry(kind, raw, source, full, parentUrl, location, previewView)), force)
     }
 
     fun findImagePreview(raw: String): android.graphics.drawable.Drawable? = runCatching {
@@ -3497,6 +3494,10 @@ internal object QQInspectorLinks {
         val now = System.currentTimeMillis()
         val prepared = ArrayList<Array<Any>>(entries.size)
         for (entry in entries) {
+            if (entry.previewView != null && isImageKind(entry.kind)) synchronized(lock) {
+                imageViewRefs[entry.raw] = WeakReference(entry.previewView)
+                while (imageViewRefs.size > 120) imageViewRefs.remove(imageViewRefs.keys.first())
+            }
             val cardPayload = isCardPayloadKind(entry.kind)
             val sanitized = if (cardPayload) validateCardPayload(entry.raw) else sanitize(entry.raw)
             if (sanitized == null) continue
