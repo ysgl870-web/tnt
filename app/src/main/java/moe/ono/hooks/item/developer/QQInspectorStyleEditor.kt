@@ -46,7 +46,7 @@ internal object QQInspectorStyleEditor {
                 textSize = 13f
                 setTextColor(0xFF1D344B.toInt())
                 setPadding(dp(11), dp(8), dp(11), dp(8))
-                inputType = inputType
+                this.inputType = inputType
                 if (multiline) {
                     minLines = 2
                     maxLines = 4
