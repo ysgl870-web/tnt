@@ -3255,66 +3255,87 @@ internal object QQInspectorLinks {
                 java.lang.reflect.Proxy.newProxyInstance(
                     callbackType.classLoader,
                     arrayOf(callbackType)
-                ) { _, method, args ->
-                    if (method.name == "onReceiveValue") {
-                        val returned = args?.firstOrNull()?.toString().orEmpty()
-                        val payload = runCatching {
-                            when (val parsed = org.json.JSONTokener(returned).nextValue()) {
-                                is String -> parsed
-                                else -> parsed.toString()
-                            }
-                        }.getOrDefault(returned)
-                        val document = runCatching { JSONObject(payload) }.getOrNull()
-                        if (document != null) {
-                            val source = "WebView DOM · ${webView.javaClass.simpleName}"
-                            val domEntries = ArrayList<LinkEntry>()
-                            val urlRows = document.optJSONArray("links") ?: JSONArray()
-                            for (i in 0 until urlRows.length()) {
-                                val raw = urlRows.optString(i).trim()
-                                if (sanitize(raw) != null && synchronized(links) { links.add(raw) }) {
-                                    domEntries.add(LinkEntry("WEBVIEW_DOM", raw, source, parentUrl = pageUrl))
-                                }
-                            }
-                            val imageRows = document.optJSONArray("images") ?: JSONArray()
-                            for (i in 0 until imageRows.length()) {
-                                val item = imageRows.optJSONObject(i)
-                                val raw = (item?.optString("url") ?: imageRows.optString(i)).trim()
-                                val normalized = normalizeImageUrl(raw) ?: continue
-                                val location = if (item != null) {
-                                    "WebView 坐标：${item.optInt("x")},${item.optInt("y")} · " +
-                                        "尺寸：${item.optInt("width")}×${item.optInt("height")}" +
-                                        item.optString("alt").takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
-                                } else {
-                                    "WebView 页面中的可见图片元素"
-                                }
-                                if (synchronized(images) {
-                                        imageLocations[normalized] = location
-                                        images.add(normalized)
-                                    }) {
-                                    domEntries.add(
-                                        LinkEntry("IMAGE_DOM", normalized, source, full = true,
-                                            parentUrl = pageUrl, location = location)
-                                    )
-                                }
-                            }
-                            val cardRows = document.optJSONArray("cards") ?: JSONArray()
-                            for (i in 0 until cardRows.length()) {
-                                val raw = cardRows.optString(i).trim()
-                                val validated = validateCardPayload(raw) ?: continue
-                                if (synchronized(cards) { cards.add(validated) }) {
-                                    domEntries.add(LinkEntry("CARD_JSON_DOM", validated, source, full = true, parentUrl = pageUrl))
-                                    extractUrls(validated).forEach { candidate ->
-                                        if (sanitize(candidate) != null && synchronized(links) { links.add(candidate) }) {
-                                            domEntries.add(LinkEntry("CARD_JSON_LINK", candidate, source, parentUrl = pageUrl))
+                ) { proxy, method, args ->
+                    when (method.name) {
+                        "onReceiveValue" -> {
+                            try {
+                                val returned = args?.firstOrNull()?.toString().orEmpty()
+                                val payload = runCatching {
+                                    when (val parsed = org.json.JSONTokener(returned).nextValue()) {
+                                        is String -> parsed
+                                        else -> parsed.toString()
+                                    }
+                                }.getOrDefault(returned)
+                                val document = runCatching { JSONObject(payload) }.getOrNull()
+                                if (document != null) {
+                                    val source = "WebView DOM · ${webView.javaClass.simpleName}"
+                                    val domEntries = ArrayList<LinkEntry>()
+                                    val urlRows = document.optJSONArray("links") ?: JSONArray()
+                                    for (i in 0 until urlRows.length()) {
+                                        val raw = urlRows.optString(i).trim()
+                                        if (sanitize(raw) != null && synchronized(links) { links.add(raw) }) {
+                                            domEntries.add(LinkEntry("WEBVIEW_DOM", raw, source, parentUrl = pageUrl))
                                         }
                                     }
+                                    val imageRows = document.optJSONArray("images") ?: JSONArray()
+                                    for (i in 0 until imageRows.length()) {
+                                        val item = imageRows.optJSONObject(i)
+                                        val raw = (item?.optString("url") ?: imageRows.optString(i)).trim()
+                                        val normalized = normalizeImageUrl(raw) ?: continue
+                                        val location = if (item != null) {
+                                            "WebView 坐标：${item.optInt("x")},${item.optInt("y")} · " +
+                                                "尺寸：${item.optInt("width")}×${item.optInt("height")}" +
+                                                item.optString("alt").takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
+                                        } else {
+                                            "WebView 页面中的可见图片元素"
+                                        }
+                                        if (synchronized(images) {
+                                                imageLocations[normalized] = location
+                                                images.add(normalized)
+                                            }) {
+                                            domEntries.add(
+                                                LinkEntry("IMAGE_DOM", normalized, source, full = true,
+                                                    parentUrl = pageUrl, location = location)
+                                            )
+                                        }
+                                    }
+                                    val cardRows = document.optJSONArray("cards") ?: JSONArray()
+                                    for (i in 0 until cardRows.length()) {
+                                        val raw = cardRows.optString(i).trim()
+                                        val validated = validateCardPayload(raw) ?: continue
+                                        if (synchronized(cards) { cards.add(validated) }) {
+                                            domEntries.add(LinkEntry("CARD_JSON_DOM", validated, source, full = true, parentUrl = pageUrl))
+                                            extractUrls(validated).forEach { candidate ->
+                                                if (sanitize(candidate) != null && synchronized(links) { links.add(candidate) }) {
+                                                    domEntries.add(LinkEntry("CARD_JSON_LINK", candidate, source, parentUrl = pageUrl))
+                                                }
+                                            }
+                                        }
+                                    }
+                                    addBatch(domEntries)
                                 }
+                            } catch (error: Throwable) {
+                                Logger.w("TNT WebView DOM callback failed: ${error.javaClass.simpleName}")
+                            } finally {
+                                completeOne()
                             }
-                            addBatch(domEntries)
+                            null
                         }
-                        completeOne()
+                        "hashCode" -> System.identityHashCode(proxy)
+                        "equals" -> proxy === args?.firstOrNull()
+                        "toString" -> "TNTWebDocumentCallback(${webView.javaClass.simpleName})"
+                        else -> when (method.returnType) {
+                            java.lang.Boolean.TYPE -> false
+                            java.lang.Integer.TYPE -> 0
+                            java.lang.Long.TYPE -> 0L
+                            java.lang.Float.TYPE -> 0f
+                            java.lang.Double.TYPE -> 0.0
+                            java.lang.Short.TYPE -> 0.toShort()
+                            java.lang.Byte.TYPE -> 0.toByte()
+                            java.lang.Character.TYPE -> '\u0000'
+                            else -> null
+                        }
                     }
-                    null
                 }
             }.getOrNull()
 
