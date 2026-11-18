@@ -362,7 +362,7 @@ internal object QQInspectorGeometry {
     }
 
     private fun removeRuleListener(rule: FollowRule) {
-        val root = rule.root.get() ?: return
+        val root = rule.root
         runCatching {
             val observer = root.viewTreeObserver
             if (observer.isAlive) observer.removeOnGlobalLayoutListener(rule.listener)
