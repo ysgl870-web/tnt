@@ -2998,6 +2998,188 @@ internal object QQInspectorLinks {
         return found.toList()
     }
 
+    data class WebDocumentResult(
+        val links: List<String>,
+        val images: List<String>,
+        val cards: List<String>
+    )
+
+    /**
+     * Read-only DOM scan for the currently visible WebView/X5 pages.
+     * It reads visible anchors/images and JSON data scripts only; it never reads cookies,
+     * localStorage, request bodies, arbitrary page globals, or executes page-provided code.
+     */
+    fun scanVisibleWebDocuments(activity: Activity, onComplete: (WebDocumentResult) -> Unit) {
+        val root = runCatching { activity.findViewById<ViewGroup>(android.R.id.content) }.getOrNull()
+        if (root == null) {
+            onComplete(WebDocumentResult(emptyList(), emptyList(), emptyList()))
+            return
+        }
+
+        val webViews = ArrayList<View>()
+        var visited = 0
+        fun walk(view: View) {
+            if (visited++ >= 1400 || webViews.size >= 8) return
+            if (view is InspectorOverlay || view.tag == "tnt.qq.inspector.entry") return
+            if (view.visibility != View.VISIBLE || view.alpha <= 0.03f || !view.isShown) return
+            val className = view.javaClass.name
+            if (view is WebView || className.contains("webview", true) || className.contains("x5", true)) {
+                webViews.add(view)
+            }
+            if (view is ViewGroup) {
+                for (index in 0 until view.childCount) {
+                    if (webViews.size >= 8) break
+                    walk(view.getChildAt(index))
+                }
+            }
+        }
+        walk(root)
+        if (webViews.isEmpty()) {
+            onComplete(WebDocumentResult(emptyList(), emptyList(), emptyList()))
+            return
+        }
+
+        val links = LinkedHashSet<String>()
+        val images = LinkedHashSet<String>()
+        val cards = LinkedHashSet<String>()
+        val remaining = java.util.concurrent.atomic.AtomicInteger(webViews.size)
+        val completed = java.util.concurrent.atomic.AtomicBoolean(false)
+        val handler = android.os.Handler(activity.mainLooper)
+        val pageUrl = currentPageUrl(activity)
+
+        fun finish() {
+            if (!completed.compareAndSet(false, true)) return
+            val result = synchronized(links) {
+                WebDocumentResult(links.toList(), images.toList(), cards.toList())
+            }
+            if (activity.isFinishing || activity.isDestroyed) return
+            activity.runOnUiThread { onComplete(result) }
+        }
+
+        handler.postDelayed({ finish() }, 1600L)
+
+        val script = """
+            (function() {
+              try {
+                const visible = (e) => {
+                  const r = e.getBoundingClientRect();
+                  const s = window.getComputedStyle(e);
+                  return r.width > 0 && r.height > 0 && s.display !== 'none' &&
+                    s.visibility !== 'hidden' && Number(s.opacity || 1) > 0.02;
+                };
+                const linkNodes = Array.from(document.querySelectorAll(
+                  'a[href],area[href],[data-url],[data-href],[data-jump-url],[data-scheme]'
+                )).filter(visible).slice(0, 120);
+                const urls = linkNodes.map(e =>
+                  e.href || e.getAttribute('data-url') || e.getAttribute('data-href') ||
+                  e.getAttribute('data-jump-url') || e.getAttribute('data-scheme') || ''
+                ).filter(Boolean);
+                const imageNodes = Array.from(document.querySelectorAll(
+                  'img[src],img[data-src],img[data-original],source[src],video[poster]'
+                )).filter(visible).slice(0, 80);
+                const imgs = imageNodes.map(e =>
+                  e.currentSrc || e.src || e.getAttribute('data-src') ||
+                  e.getAttribute('data-original') || e.getAttribute('poster') || ''
+                ).filter(Boolean);
+                const dataNodes = Array.from(document.querySelectorAll(
+                  'script[type="application/ld+json"],script[type="application/json"],[data-ark],[data-card-json]'
+                )).slice(0, 24);
+                const jsons = dataNodes.map(e =>
+                  e.textContent || e.getAttribute('data-ark') ||
+                  e.getAttribute('data-card-json') || ''
+                ).filter(v => v.length >= 8 && v.length <= 24000);
+                return JSON.stringify({ links: urls, images: imgs, cards: jsons });
+              } catch (_) {
+                return JSON.stringify({ links: [], images: [], cards: [] });
+              }
+            })();
+        """.trimIndent()
+
+        webViews.forEach { webView ->
+            val done = java.util.concurrent.atomic.AtomicBoolean(false)
+            fun completeOne() {
+                if (!done.compareAndSet(false, true)) return
+                if (remaining.decrementAndGet() <= 0) finish()
+            }
+
+            val callbackMethod = runCatching {
+                webView.javaClass.methods.firstOrNull { method ->
+                    method.name == "evaluateJavascript" &&
+                        method.parameterTypes.size == 2 &&
+                        method.parameterTypes[0] == String::class.java &&
+                        method.parameterTypes[1].isInterface
+                }
+            }.getOrNull()
+
+            if (callbackMethod == null) {
+                completeOne()
+                return@forEach
+            }
+
+            val callbackType = callbackMethod.parameterTypes[1]
+            val callback = runCatching {
+                java.lang.reflect.Proxy.newProxyInstance(
+                    callbackType.classLoader,
+                    arrayOf(callbackType)
+                ) { _, method, args ->
+                    if (method.name == "onReceiveValue") {
+                        val returned = args?.firstOrNull()?.toString().orEmpty()
+                        val payload = runCatching {
+                            when (val parsed = org.json.JSONTokener(returned).nextValue()) {
+                                is String -> parsed
+                                else -> parsed.toString()
+                            }
+                        }.getOrDefault(returned)
+                        val document = runCatching { JSONObject(payload) }.getOrNull()
+                        if (document != null) {
+                            val source = "WebView DOM · ${webView.javaClass.simpleName}"
+                            val urlRows = document.optJSONArray("links") ?: JSONArray()
+                            for (i in 0 until urlRows.length()) {
+                                val raw = urlRows.optString(i).trim()
+                                if (sanitize(raw) != null && synchronized(links) { links.add(raw) }) {
+                                    add("WEBVIEW_DOM", raw, source, parentUrl = pageUrl)
+                                }
+                            }
+                            val imageRows = document.optJSONArray("images") ?: JSONArray()
+                            for (i in 0 until imageRows.length()) {
+                                val raw = imageRows.optString(i).trim()
+                                val normalized = normalizeImageUrl(raw) ?: continue
+                                if (synchronized(images) { images.add(normalized) }) {
+                                    add(
+                                        "IMAGE_DOM", normalized, source, full = true,
+                                        parentUrl = pageUrl, location = "WebView 页面中的可见图片元素"
+                                    )
+                                }
+                            }
+                            val cardRows = document.optJSONArray("cards") ?: JSONArray()
+                            for (i in 0 until cardRows.length()) {
+                                val raw = cardRows.optString(i).trim()
+                                val validated = validateCardPayload(raw) ?: continue
+                                if (synchronized(cards) { cards.add(validated) }) {
+                                    add("CARD_JSON_DOM", validated, source, full = true, parentUrl = pageUrl)
+                                    extractUrls(validated).forEach { candidate ->
+                                        if (sanitize(candidate) != null) synchronized(links) { links.add(candidate) }
+                                    }
+                                }
+                            }
+                        }
+                        completeOne()
+                    }
+                    null
+                }
+            }.getOrNull()
+
+            if (callback == null) {
+                completeOne()
+            } else {
+                webView.post {
+                    runCatching { callbackMethod.invoke(webView, script, callback) }
+                        .onFailure { completeOne() }
+                }
+            }
+        }
+    }
+
     private fun looksLikeLink(raw: String): Boolean {
         val scheme = runCatching { Uri.parse(raw).scheme?.lowercase(Locale.ROOT) }.getOrNull()
         return scheme in setOf("http", "https", "mqq", "mqqapi", "mqqwpa", "qqdocurl", "qq", "tencent")
