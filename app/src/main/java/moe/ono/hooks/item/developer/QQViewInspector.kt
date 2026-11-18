@@ -1508,7 +1508,7 @@ private class InspectorOverlay private constructor(
             colors = intArrayOf(0xFF7357D8.toInt(), 0xFF236DBB.toInt()))
 
         if (positionEditTarget != null) {
-            addSection("POSITION CONTROL  /  精细位置控制", "拖动控件边框移动；拖动右下角可调整大小")
+            addSection("POSITION CONTROL  /  精细位置控制", "控件内部拖动移动；四角锚点拖动调整宽高")
             toolbar.addView(TextView(activity).apply {
                 tag = "tnt.position.summary"
                 text = "正在读取控件位置…"
@@ -1704,7 +1704,7 @@ private class InspectorOverlay private constructor(
         selectedViews.add(node.view)
         buildToolbar()
         updatePositionEditSummary()
-        showInspectorToast("位置控制已开启：拖动控件边框移动，拖动右下角调整大小")
+        showInspectorToast("位置控制已开启：拖动控件内部移动，拖动四角锚点调整宽高")
     }
 
     private fun finishPositionControl() {
