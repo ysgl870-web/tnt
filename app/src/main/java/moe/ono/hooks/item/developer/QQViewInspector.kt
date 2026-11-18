@@ -206,7 +206,7 @@ private object QQInspectorLinkHistoryDialog {
         val labels = groups.map { (url, events) ->
             val latest = events.maxByOrNull { it.optLong("time") }
             val shown = latest?.optString("display", url).orEmpty().replace('\n', ' ')
-            "${events.size} 次捕获 · ${shown.take(150)}\n最近：${formatter.format(Date(latest?.optLong("time") ?: 0L))}"
+            "${events.size} 次捕获 · ${shown.take(76)}\n最近：${formatter.format(Date(latest?.optLong("time") ?: 0L))}"
         }.toTypedArray()
         AlertDialog.Builder(context)
             .setTitle("$category · ${groups.size} 个不同内容")
@@ -1142,9 +1142,19 @@ private class InspectorOverlay private constructor(
         isClickable = false
         isFocusable = false
         addView(boxes, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
-        val panelParams = LayoutParams(dp(activity, 224), dp(activity, 390), Gravity.END or Gravity.CENTER_VERTICAL).apply {
-            marginEnd = dp(activity, 12)
+        val availableWidth = (root.width.takeIf { it > 0 } ?: activity.resources.displayMetrics.widthPixels)
+        val availableHeight = (root.height.takeIf { it > 0 } ?: activity.resources.displayMetrics.heightPixels)
+        val panelWidth = (availableWidth * .88f).toInt()
+            .coerceAtMost(dp(activity, 340))
+            .coerceAtLeast(dp(activity, 220).coerceAtMost(availableWidth))
+        val panelHeight = (availableHeight * .76f).toInt()
+            .coerceAtMost(dp(activity, 520))
+            .coerceAtLeast(dp(activity, 300).coerceAtMost(availableHeight))
+        val panelParams = LayoutParams(panelWidth, panelHeight, Gravity.END or Gravity.CENTER_VERTICAL).apply {
+            marginEnd = dp(activity, 8)
         }
+        panelStartWidth = panelWidth
+        panelStartHeight = panelHeight
         addView(toolbarScroll, panelParams)
         val handleParams = LayoutParams(dp(activity, 60), dp(activity, 60), Gravity.END or Gravity.CENTER_VERTICAL).apply {
             marginEnd = dp(activity, 12)
@@ -1203,10 +1213,12 @@ private class InspectorOverlay private constructor(
                     }
                     MotionEvent.ACTION_MOVE -> {
                         val dx = event.rawX - panelDragX; val dy = event.rawY - panelDragY
-                        val maxX = (root.width - toolbarScroll.width - lp.marginEnd).toFloat().coerceAtLeast(0f)
-                        val maxY = (root.height - toolbarScroll.height).toFloat().coerceAtLeast(0f)
-                        toolbarScroll.translationX = (panelStartX + dx).coerceIn(-maxX, 0f)
-                        toolbarScroll.translationY = (panelStartY + dy).coerceIn(-maxY, maxY)
+                        val minX = -toolbarScroll.left.toFloat()
+                        val maxX = (root.width - toolbarScroll.right).toFloat()
+                        val minY = -toolbarScroll.top.toFloat()
+                        val maxY = (root.height - toolbarScroll.bottom).toFloat()
+                        toolbarScroll.translationX = (panelStartX + dx).coerceIn(minX, maxX)
+                        toolbarScroll.translationY = (panelStartY + dy).coerceIn(minY, maxY)
                         true
                     }
                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> true
@@ -1296,7 +1308,7 @@ private class InspectorOverlay private constructor(
             val row = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
             items.forEachIndexed { index, item ->
                 val button = toolButton(item.first, item.second, colors)
-                row.addView(button, LinearLayout.LayoutParams(0, dp(activity, 48), 1f).apply {
+                row.addView(button, LinearLayout.LayoutParams(0, dp(activity, 52), 1f).apply {
                     if (index > 0) marginStart = dp(activity, 6)
                 })
                 button.alpha = 0f; button.translationY = dp(activity, 7).toFloat()
@@ -1360,11 +1372,25 @@ private class InspectorOverlay private constructor(
                         true
                     }
                     MotionEvent.ACTION_MOVE -> {
+                        val minWidth = dp(activity, 220).coerceAtMost(root.width)
+                        val maxWidth = (root.width * .92f).toInt().coerceAtLeast(minWidth)
+                        val minHeight = dp(activity, 280).coerceAtMost(root.height)
+                        val maxHeight = (root.height * .9f).toInt().coerceAtLeast(minHeight)
                         lp.width = (panelStartWidth + event.rawX - panelDragX).toInt()
-                            .coerceIn(dp(activity, 184), (root.width * .92f).toInt().coerceAtLeast(dp(activity, 184)))
+                            .coerceIn(minWidth, maxWidth)
                         lp.height = (panelStartHeight + event.rawY - panelDragY).toInt()
-                            .coerceIn(dp(activity, 220), (root.height * .9f).toInt().coerceAtLeast(dp(activity, 220)))
+                            .coerceIn(minHeight, maxHeight)
                         toolbarScroll.layoutParams = lp
+                        toolbarScroll.post {
+                            toolbarScroll.translationX = toolbarScroll.translationX.coerceIn(
+                                -toolbarScroll.left.toFloat(),
+                                (root.width - toolbarScroll.right).toFloat()
+                            )
+                            toolbarScroll.translationY = toolbarScroll.translationY.coerceIn(
+                                -toolbarScroll.top.toFloat(),
+                                (root.height - toolbarScroll.bottom).toFloat()
+                            )
+                        }
                         true
                     }
                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> true
@@ -1405,10 +1431,15 @@ private class InspectorOverlay private constructor(
     }
 
     private fun toolButton(label: String, action: () -> Unit, colors: IntArray = intArrayOf(0xFF087DBB.toInt(), 0xFF1456A0.toInt())) = TextView(activity).apply {
-        text = label; textSize = 11f; gravity = Gravity.CENTER
-        maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END
+        text = label
+        textSize = 10.5f
+        gravity = Gravity.CENTER
+        maxLines = 2
+        ellipsize = android.text.TextUtils.TruncateAt.END
         includeFontPadding = false
+        setHorizontallyScrolling(false)
         setLineSpacing(dp(activity, 2).toFloat(), 1f)
+        breakStrategy = android.text.Layout.BREAK_STRATEGY_HIGH_QUALITY
         setTextColor(0xFFFFFFFF.toInt())
         val shape = GradientDrawable(
             GradientDrawable.Orientation.LEFT_RIGHT,
@@ -1770,14 +1801,21 @@ private class InspectorOverlay private constructor(
                 text = value
                 textSize = if (heading) 14f else 12f
                 setTextColor(if (heading) 0xFF18334A.toInt() else 0xFF526575.toInt())
+                setHorizontallyScrolling(false)
+                breakStrategy = android.text.Layout.BREAK_STRATEGY_HIGH_QUALITY
+                setLineSpacing(dp(activity, 2).toFloat(), 1f)
                 setPadding(0, dp(activity, 5), 0, dp(activity, 5))
             })
         }
         fun actionButton(label: String, callback: () -> Unit) {
             val button = TextView(activity).apply {
                 text = label
-                textSize = 13f
+                textSize = 12.5f
                 gravity = Gravity.CENTER
+                maxLines = 2
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                includeFontPadding = false
+                setHorizontallyScrolling(false)
                 setTextColor(0xFFFFFFFF.toInt())
                 isClickable = true
                 isFocusable = true
@@ -1850,94 +1888,21 @@ private class InspectorOverlay private constructor(
     private fun confirmHistoryOpen(url: String) {
         AlertDialog.Builder(activity)
             .setTitle("确认在 QQ 中打开？")
-            .setMessage("将优先尝试由 QQ / TIM 处理此链接；如果 QQ 没有匹配的页面入口，才回退到系统默认应用。\n\n$url\n\n请确认链接来源可信。")
+            .setMessage("网页链接会优先通过 QQ 内置浏览器打开；QQ Scheme 会保留原协议交给 QQ/TIM 处理，无法接管时再回退到系统浏览器。\n\n$url\n\n请确认链接来源可信。")
             .setPositiveButton("确认跳转") { _, _ -> openHistoryUrl(url, preferQQ = true) }
             .setNegativeButton("取消", null)
             .show()
     }
 
     /**
-     * Restore the pre-regression QQ/TIM route: QQ and TIM are tried first with
-     * CATEGORY_BROWSABLE, followed by resolver fallback. Several QQ internal
-     * pages only expose their VIEW filters when this category is present.
+     * Ordinary web links go through QQ's mqqapi://forward/url in-app browser.
+     * QQ-specific schemes are sent unchanged to their native handlers.
      */
     private fun openHistoryUrl(url: String, preferQQ: Boolean): Boolean {
-        val value = url.trim()
-        if (value.isEmpty()) {
-            showInspectorToast("链接内容为空，无法跳转")
-            return false
-        }
-        val uri = runCatching { Uri.parse(value) }.getOrNull()
-        val scheme = uri?.scheme?.lowercase(Locale.ROOT)
-        if (uri == null || scheme.isNullOrBlank()) {
-            showInspectorToast("链接格式无效，无法跳转")
-            return false
-        }
-
-        val isWebUrl = scheme == "http" || scheme == "https"
-        val isQQScheme = scheme in setOf("mqq", "mqqapi", "mqqwpa", "qqdocurl", "qq", "tencent", "tim")
-
-        fun launch(intent: Intent, label: String): Boolean {
-            return try {
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                activity.startActivity(intent)
-                showInspectorToast("已交给${label}打开")
-                true
-            } catch (error: Throwable) {
-                Logger.w("TNT link open via $label failed: ${error.javaClass.simpleName}")
-                false
-            }
-        }
-
-        // First try QQ/TIM in-app handlers. Keep BROWSABLE here: this is the
-        // category used by older TNT builds that successfully opened QQ pages.
-        if (preferQQ || isQQScheme || !isWebUrl) {
-            for (pkg in listOf("com.tencent.mobileqq", "com.tencent.tim")) {
-                val intent = Intent(Intent.ACTION_VIEW, uri)
-                    .addCategory(Intent.CATEGORY_BROWSABLE)
-                    .setPackage(pkg)
-                if (launch(intent, if (pkg == "com.tencent.mobileqq") "QQ" else "TIM")) return true
-            }
-        }
-
-        // A few QQ custom schemes do not declare BROWSABLE. Retry them without
-        // the category before handing the URI to an unrelated application.
-        if (isQQScheme) {
-            for (pkg in listOf("com.tencent.mobileqq", "com.tencent.tim")) {
-                val intent = Intent(Intent.ACTION_VIEW, uri).setPackage(pkg)
-                if (launch(intent, if (pkg == "com.tencent.mobileqq") "QQ" else "TIM")) return true
-            }
-        }
-
-        if (isWebUrl) {
-            val browsers = listOf(
-                "com.android.chrome",
-                "com.google.android.apps.chrome",
-                "com.android.browser",
-                "com.sec.android.app.sbrowser",
-                "org.mozilla.firefox",
-                "com.microsoft.emmx",
-                "com.brave.browser",
-                "com.opera.browser"
-            )
-            for (pkg in browsers) {
-                val intent = Intent(Intent.ACTION_VIEW, uri)
-                    .addCategory(Intent.CATEGORY_BROWSABLE)
-                    .setPackage(pkg)
-                if (launch(intent, "浏览器")) return true
-            }
-        }
-
-        val fallback = Intent(Intent.ACTION_VIEW, uri)
-            .addCategory(Intent.CATEGORY_BROWSABLE)
-        if (launch(fallback, if (isWebUrl) "系统默认浏览器" else "系统应用")) return true
-
-        // Last compatibility fallback for handlers that require an implicit
-        // VIEW intent without BROWSABLE.
-        if (launch(Intent(Intent.ACTION_VIEW, uri), "系统链接处理器")) return true
-
-        showInspectorToast(if (isWebUrl) "未找到可用的 QQ 页面入口或浏览器" else "没有应用能够处理此 Scheme")
-        return false
+        val result = QQInspectorNavigation.open(activity, url, preferQQBrowser = preferQQ)
+        showInspectorToast(result.message)
+        if (!result.opened) Logger.w("TNT link navigation failed: ${result.message}")
+        return result.opened
     }
 
     private fun searchControls() {
@@ -1979,8 +1944,8 @@ private class InspectorOverlay private constructor(
             return
         }
         val labels = matches.mapIndexed { index, node ->
-            "${index + 1}. ${node.className.substringAfterLast('.')}\n" +
-                "${node.resourceId} · ${node.width}×${node.height} · ${node.area}px²"
+            "${index + 1}. ${node.className.substringAfterLast('.').take(56)}\n" +
+                "${node.resourceId.take(62)} · ${node.width}×${node.height} · ${node.area}px²"
         }.toTypedArray()
         AlertDialog.Builder(activity)
             .setTitle("查找结果 · ${matches.size} 个")
@@ -1998,10 +1963,10 @@ private class InspectorOverlay private constructor(
     private fun showList() {
         val shownNodes = nodes.take(160)
         val labels = shownNodes.mapIndexed { index, node ->
-            "${index + 1}. ${node.className.substringAfterLast('.')}\n" +
-                "${node.resourceId} · ${node.width}×${node.height} · ${node.area}px²" +
-                if (node.directLinks.isNotEmpty()) "\n🔗 控件链接：${node.directLinks.first()}"
-                else if (node.links.isNotEmpty()) "\n🌐 页面链接：${node.links.first()}" else ""
+            "${index + 1}. ${node.className.substringAfterLast('.').take(56)}\n" +
+                "${node.resourceId.take(62)} · ${node.width}×${node.height} · ${node.area}px²" +
+                if (node.directLinks.isNotEmpty()) "\n🔗 ${QQInspectorLinks.mask(node.directLinks.first()).take(78)}"
+                else if (node.links.isNotEmpty()) "\n🌐 ${QQInspectorLinks.mask(node.links.first()).take(78)}" else ""
         }.toTypedArray()
         AlertDialog.Builder(activity)
             .setTitle("控件列表（共 ${nodes.size} 个，显示前 ${shownNodes.size} 个）")
@@ -2111,6 +2076,8 @@ private class InspectorOverlay private constructor(
             textSize = 14f
             setTextColor(0xFF172B43.toInt())
             setLineSpacing(dp(activity, 3).toFloat(), 1.08f)
+            setHorizontallyScrolling(false)
+            breakStrategy = android.text.Layout.BREAK_STRATEGY_HIGH_QUALITY
             setPadding(dp(activity, 10), dp(activity, 10), dp(activity, 10), dp(activity, 14))
             background = GradientDrawable().apply {
                 cornerRadius = dp(activity, 12).toFloat()
@@ -2147,9 +2114,13 @@ private class InspectorOverlay private constructor(
         actions.forEach { actionLabel ->
             val actionButton = TextView(activity).apply {
                 text = actionLabel
-                textSize = 14f
+                textSize = 13f
                 setTextColor(0xFF075A9D.toInt())
                 gravity = Gravity.CENTER_VERTICAL
+                maxLines = 2
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                includeFontPadding = false
+                setHorizontallyScrolling(false)
                 setPadding(dp(activity, 14), dp(activity, 13), dp(activity, 14), dp(activity, 13))
                 background = GradientDrawable().apply {
                     cornerRadius = dp(activity, 9).toFloat()
@@ -2252,7 +2223,10 @@ private class InspectorOverlay private constructor(
             attrs.dimAmount = 0.22f
             window.attributes = attrs
             val metrics = activity.resources.displayMetrics
-            window.setLayout((metrics.widthPixels * 0.94f).toInt(), (metrics.heightPixels * 0.82f).toInt())
+            val maxWidth = (metrics.widthPixels * .94f).toInt().coerceAtMost(dp(activity, 520))
+            val maxHeight = (metrics.heightPixels * .88f).toInt().coerceAtMost(dp(activity, 760))
+            window.setLayout(maxWidth, maxHeight)
+            window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         }
     }
 
