@@ -689,8 +689,10 @@ private object InspectorTree {
 
     private fun collectCardJson(view: View): List<String> {
         val className = view.javaClass.name
-        val cardLike = InspectorReflectionCache.matches(className, "(ark|card|struct|json|share)")
-        val hasCardFields = InspectorReflectionCache.fields(view.javaClass, "(ark|card|json|payload|extra|meta|struct|share)").isNotEmpty()
+        val cardLike = InspectorReflectionCache.matches(className, "(ark|card|struct|json|share|richmsg|arkview)")
+        val cardFieldPattern = "(ark|card|json|payload|extra|meta|struct|share|element|message|msg|content|data|rich|bundle|info)"
+        val hasCardFields = InspectorReflectionCache.fields(view.javaClass, cardFieldPattern).isNotEmpty() ||
+            InspectorReflectionCache.methods(view.javaClass, cardFieldPattern).isNotEmpty()
         if (!cardLike && !hasCardFields && view !is TextView && view.tag == null && view.contentDescription == null) return emptyList()
         val found = LinkedHashSet<String>()
         fun accept(value: Any?) {
@@ -722,10 +724,10 @@ private object InspectorTree {
         fun inspectCardObject(value: Any?) {
             if (value == null || value is String || value is Number || value is Boolean) return
             if (cardLike) accept(value.toString())
-            InspectorReflectionCache.fields(value.javaClass, "(ark|card|json|payload|extra|meta|struct|share)").take(32).forEach { field ->
+            InspectorReflectionCache.fields(value.javaClass, "(ark|card|json|payload|extra|meta|struct|share|element|message|msg|content|data|rich|bundle|info)").take(32).forEach { field ->
                 runCatching { field.isAccessible = true; accept(field.get(value)) }
             }
-            InspectorReflectionCache.methods(value.javaClass, "(ark|card|json|payload|extra|meta|struct|share)").take(12).forEach { getter -> runCatching { accept(getter.invoke(value)) } }
+            InspectorReflectionCache.methods(value.javaClass, "(ark|card|json|payload|extra|meta|struct|share|element|message|msg|content|data|rich|bundle|info)").take(12).forEach { getter -> runCatching { accept(getter.invoke(value)) } }
         }
         accept(view.tag)
         inspectCardObject(view.tag)
@@ -733,7 +735,7 @@ private object InspectorTree {
         var type: Class<*>? = view.javaClass
         var depth = 0
         while (type != null && type != View::class.java && depth++ < 4) {
-            InspectorReflectionCache.fields(type, "(ark|card|json|payload|extra|meta|struct|share)")
+            InspectorReflectionCache.fields(type, "(ark|card|json|payload|extra|meta|struct|share|element|message|msg|content|data|rich|bundle|info)")
                 .take(48).forEach { field ->
                     runCatching {
                         field.isAccessible = true
@@ -800,7 +802,7 @@ private object InspectorTree {
             }.trim()
             if (raw.length !in 5..4096) return
             val scheme = runCatching { Uri.parse(raw).scheme?.lowercase(Locale.ROOT) }.getOrNull()
-            if (scheme !in setOf("http", "https", "mqq", "mqqapi", "mqqwpa", "qqdocurl", "qq", "tencent")) return
+            if (scheme !in setOf("http", "https", "intent", "mqq", "mqqapi", "mqqwpa", "qqdocurl", "qq", "tim", "tencent")) return
             QQInspectorLinks.add("VIEW_MODEL_LINK", raw, "$className/$source")
             QQInspectorLinks.sanitize(raw)?.let(found::add)
         }
@@ -3194,7 +3196,7 @@ internal object QQInspectorLinks {
 
     private fun looksLikeLink(raw: String): Boolean {
         val scheme = runCatching { Uri.parse(raw).scheme?.lowercase(Locale.ROOT) }.getOrNull()
-        return scheme in setOf("http", "https", "mqq", "mqqapi", "mqqwpa", "qqdocurl", "qq", "tencent")
+        return scheme in setOf("http", "https", "intent", "mqq", "mqqapi", "mqqwpa", "qqdocurl", "qq", "tim", "tencent")
     }
 
     fun currentPageUrl(activity: Activity): String? = runCatching {
@@ -3284,9 +3286,10 @@ internal object QQInspectorLinks {
     private val RKEY_VALUE = Regex("(rkey=)[A-Za-z0-9\\-_=+/%]{6,}", RegexOption.IGNORE_CASE)
     private val SECRET_VALUE = Regex("((?:token|cookie|auth|ticket|sign|skey|p_skey|pskey|session|password)=)[A-Za-z0-9\\-_=+/%]{6,}", RegexOption.IGNORE_CASE)
     private val PLAIN_URL = Regex(
-        "(?i)(?:https?|mqqapi|mqqwpa|qqdocurl)://[A-Za-z0-9\\-._~:/?#\\[\\]@!&'()*+,;=%]+",
+        "(?i)(?:https?|intent|mqqapi|mqqwpa|mqq|qqdocurl|tim|qq|tencent)://[A-Za-z0-9\\-._~:/?#\\[\\]@!&'()*+,;=%]+",
         RegexOption.IGNORE_CASE
     )
+    private val WWW_URL = Regex("(?i)\\bwww\\.[A-Za-z0-9][A-Za-z0-9.-]*\\.[A-Za-z]{2,}(?:/[^\\s\"'<>]*)?")
 
     /** 界面上展示用的脱敏文本：直链保留可读部分，签名值打码 */
     fun mask(raw: String): String = runCatching {
@@ -3298,11 +3301,17 @@ internal object QQInspectorLinks {
     /** 从一段正文/JSON 里提取所有链接 */
     fun extractUrls(raw: String): List<String> {
         if (raw.isBlank()) return emptyList()
-        return PLAIN_URL.findAll(raw.take(200_000))
-            .map { it.value.trimEnd('.', ',', ';', ')', ']', '\'', '"', '。', '，', '）') }
-            .filter { it.length in 10..4096 }
-            .take(64)
-            .toList()
+        val text = raw.take(200_000)
+        val result = LinkedHashSet<String>()
+        PLAIN_URL.findAll(text).forEach { match ->
+            val value = match.value.trimEnd('.', ',', ';', ')', ']', '\'', '"', '。', '，', '）')
+            if (value.length in 10..4096) result.add(value)
+        }
+        WWW_URL.findAll(text).forEach { match ->
+            val value = match.value.trimEnd('.', ',', ';', ')', ']', '\'', '"', '。', '，', '）')
+            if (value.length in 10..4096) result.add("https://$value")
+        }
+        return result.take(80)
     }
 
     fun sanitize(raw: String): String? {
@@ -3310,7 +3319,7 @@ internal object QQInspectorLinks {
             val trimmed = raw.trim().take(4096)
             val uri = Uri.parse(trimmed)
             val scheme = uri.scheme?.lowercase(Locale.ROOT) ?: return null
-            if (scheme !in setOf("http", "https", "mqq", "mqqapi", "mqqwpa", "qqdocurl", "qq", "tencent")) return null
+            if (scheme !in setOf("http", "https", "intent", "mqq", "mqqapi", "mqqwpa", "qqdocurl", "qq", "tim", "tencent")) return null
             val builder = uri.buildUpon().clearQuery().fragment(null)
             val sensitive = Regex("(token|cookie|auth|ticket|secret|sign|signature|skey|p_skey|pskey|uin|session|password|passwd|access.?key|refresh)", RegexOption.IGNORE_CASE)
             uri.queryParameterNames.take(32).forEach { key ->
