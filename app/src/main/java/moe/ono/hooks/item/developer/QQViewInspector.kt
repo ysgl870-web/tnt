@@ -512,6 +512,7 @@ private object InspectorTree {
         val root = runCatching { activity.findViewById<ViewGroup>(android.R.id.content) }.getOrNull()
             ?: return emptyList()
         val result = ArrayList<InspectorNode>()
+        val historyEntries = ArrayList<QQInspectorLinks.LinkEntry>(96)
         // The caller may pass a separately captured Activity snapshot so links remain
         // available even when a host page produces no measurable View nodes.
         val pageLinks = capturedPageLinks ?: runCatching {
@@ -551,19 +552,23 @@ private object InspectorTree {
                 val imageLinks = runCatching { collectImageLinks(view) }.getOrDefault(emptyList())
                 val cardJsons = runCatching { collectCardJson(view) }.getOrDefault(emptyList())
                 val cardLinks = cardJsons.flatMap { QQInspectorLinks.extractUrls(it) }
+                val source = "${view.javaClass.name}/$resourceId"
+                directLinks.forEach { link ->
+                    historyEntries.add(QQInspectorLinks.LinkEntry("VIEW_LINK", link, source, parentUrl = pageUrl))
+                }
                 if (imageLinks.isNotEmpty()) {
                     val location = "坐标：${rect.left},${rect.top} · 尺寸：${rect.width()}×${rect.height()} · ${view.javaClass.simpleName}"
                     imageLinks.forEach { imageUrl ->
-                        QQInspectorLinks.add(
-                            "IMAGE_VIEW", imageUrl, "${view.javaClass.name}/$resourceId",
-                            full = true, parentUrl = pageUrl, location = location, previewView = view
+                        historyEntries.add(
+                            QQInspectorLinks.LinkEntry(
+                                "IMAGE_VIEW", imageUrl, source, full = true, parentUrl = pageUrl,
+                                location = location, previewView = view
+                            )
                         )
                     }
                 }
-                if (cardJsons.isNotEmpty()) {
-                    cardJsons.forEach { card ->
-                        QQInspectorLinks.add("CARD_JSON_VIEW", card, "${view.javaClass.name}/$resourceId", full = true, parentUrl = pageUrl)
-                    }
+                cardJsons.forEach { card ->
+                    historyEntries.add(QQInspectorLinks.LinkEntry("CARD_JSON_VIEW", card, source, full = true, parentUrl = pageUrl))
                 }
                 result.add(
                     InspectorNode(
@@ -598,6 +603,7 @@ private object InspectorTree {
         }
 
         visit(root, 0)
+        QQInspectorLinks.addBatch(historyEntries)
         // Screenshot behavior: smallest controls appear first.
         return result.sortedWith(compareBy<InspectorNode> { it.area }.thenByDescending { it.depth })
     }
@@ -759,7 +765,6 @@ private object InspectorTree {
             val value = view.text
             if (value is Spanned) {
                 value.getSpans(0, value.length, URLSpan::class.java).forEach { span ->
-                    QQInspectorLinks.add("TEXT_LINK", span.url, view.javaClass.simpleName)
                     QQInspectorLinks.sanitize(span.url)?.let(found::add)
                 }
             }
@@ -767,7 +772,6 @@ private object InspectorTree {
             val plain = runCatching { value?.toString() }.getOrNull()
             if (!plain.isNullOrBlank()) {
                 QQInspectorLinks.extractUrls(plain).take(16).forEach { url ->
-                    QQInspectorLinks.add("TEXT_URL", url, view.javaClass.simpleName)
                     QQInspectorLinks.sanitize(url)?.let(found::add)
                 }
             }
@@ -785,7 +789,6 @@ private object InspectorTree {
                     }?.invoke(view)?.toString()
                 }.getOrNull()
                 if (!raw.isNullOrBlank()) {
-                    QQInspectorLinks.add("WEBVIEW_CURRENT", raw, className + "." + methodName)
                     QQInspectorLinks.sanitize(raw)?.let(found::add)
                 }
             }
@@ -802,7 +805,6 @@ private object InspectorTree {
             if (raw.length !in 5..4096) return
             val scheme = runCatching { Uri.parse(raw).scheme?.lowercase(Locale.ROOT) }.getOrNull()
             if (scheme !in setOf("http", "https", "intent", "mqq", "mqqapi", "mqqwpa", "qqdocurl", "qq", "tim", "tencent")) return
-            QQInspectorLinks.add("VIEW_MODEL_LINK", raw, "$className/$source")
             QQInspectorLinks.sanitize(raw)?.let(found::add)
         }
         acceptModelLink(view.contentDescription, "contentDescription")
