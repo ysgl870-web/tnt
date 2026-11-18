@@ -33,7 +33,6 @@ import android.widget.TextView
 import android.widget.Toast
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
-import moe.ono.extract.QQMsgExtractStore
 import moe.ono.hooks._base.BaseClickableFunctionHookItem
 import moe.ono.hooks._base.BaseSwitchFunctionHookItem
 import moe.ono.hooks._core.annotation.HookItem
@@ -1942,45 +1941,64 @@ private class InspectorOverlay private constructor(
     }
 
     /** Pull refreshes the live view hierarchy and exposed models, not authenticated network traffic. */
+    /** Pull only current visible controls and the current WebView DOM, never cross-page message caches. */
     private fun pullCardData() {
         runSafely {
             val scanned = InspectorTree.collect(activity)
             nodes = scanned
             boxes.setNodes(nodes)
-            val cards = (scanned.flatMap { it.cardJsons } + QQMsgExtractStore.allCards()).distinct()
-            val images = (scanned.flatMap { it.imageLinks } + QQMsgExtractStore.allImages()).distinct()
-            if (cards.isEmpty() && images.isEmpty()) {
-                showInspectorToast("已重新拉取当前页面；暂未发现可用图片直链或卡片数据")
-                buildToolbar()
-                return@runSafely
-            }
-            val combined = buildString {
-                append("图片直链（").append(images.size).append("）\n")
-                append(if (images.isEmpty()) "未发现" else images.joinToString("\n"))
-                append("\n\nArk 卡片 JSON（").append(cards.size).append("）")
-                cards.forEachIndexed { index, json -> append("\n\n--- 卡片 ").append(index + 1).append(" ---\n").append(json) }
-            }
-            AlertDialog.Builder(activity)
-                .setTitle("已拉取：图片 ${images.size} · 卡片 ${cards.size}")
-                .setMessage("数据来自当前可见控件和已提取的消息模型缓存；不会读取数据库或抓取网络包。")
-                .setPositiveButton("复制全部") { _, _ -> copyText(activity, "图片与卡片数据", combined) }
-                .setNeutralButton("查看 / 复制卡片") { _, _ ->
-                    val view = TextView(activity).apply {
-                        text = combined; textSize = 12f; setTextColor(0xFF172B43.toInt())
-                        setTextIsSelectable(true)
-                        setPadding(dp(activity, 16), dp(activity, 12), dp(activity, 16), dp(activity, 12))
-                    }
-                    val scroll = android.widget.ScrollView(activity).apply {
-                        addView(view, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-                    }
-                    AlertDialog.Builder(activity).setTitle("图片直链与 Ark JSON").setView(scroll)
-                        .setPositiveButton("复制全部图片") { _, _ -> copyText(activity, "图片直链", images.joinToString("\n")) }
-                        .setNeutralButton("复制全部卡片") { _, _ -> copyText(activity, "Ark 卡片 JSON", cards.joinToString("\n\n")) }
-                        .setNegativeButton("关闭", null).show()
+            QQInspectorLinks.scanVisibleWebDocuments(activity) { webDocument ->
+                if (activity.isFinishing || activity.isDestroyed || parent == null) return@scanVisibleWebDocuments
+                val cards = (scanned.flatMap { it.cardJsons } + webDocument.cards).distinct()
+                val images = (scanned.flatMap { it.imageLinks } + webDocument.images).distinct()
+                if (cards.isEmpty() && images.isEmpty()) {
+                    showInspectorToast("当前页面暂未发现可用图片直链或卡片 JSON")
+                    buildToolbar()
+                    return@scanVisibleWebDocuments
                 }
-                .setNegativeButton("关闭", null)
-                .show()
-            buildToolbar()
+
+                val latestRows = QQInspectorLinks.readAll()
+                    .filter { it.optString("url") in images && QQInspectorLinks.isImageKind(it.optString("kind")) }
+                    .groupBy { it.optString("url") }
+                    .mapValues { (_, rows) -> rows.maxByOrNull { it.optLong("time") } }
+                val combined = buildString {
+                    append("当前页面图片直链（").append(images.size).append("）")
+                    images.forEachIndexed { index, image ->
+                        append("\n\n[").append(index + 1).append("] ").append(image)
+                        val location = latestRows[image]?.optString("location").orEmpty()
+                        if (location.isNotBlank()) append("\n出现位置：").append(location)
+                    }
+                    append("\n\n当前页面 JSON / Ark 卡片（").append(cards.size).append("）")
+                    cards.forEachIndexed { index, json ->
+                        append("\n\n--- 卡片 ").append(index + 1).append(" ---\n").append(json)
+                    }
+                }
+                val body = TextView(activity).apply {
+                    text = combined
+                    textSize = 12.5f
+                    setTextColor(0xFF172B43.toInt())
+                    setTextIsSelectable(true)
+                    setHorizontallyScrolling(false)
+                    breakStrategy = android.text.Layout.BREAK_STRATEGY_HIGH_QUALITY
+                    setLineSpacing(dp(activity, 2).toFloat(), 1f)
+                    setPadding(dp(activity, 16), dp(activity, 12), dp(activity, 16), dp(activity, 16))
+                }
+                val scroll = android.widget.ScrollView(activity).apply {
+                    isFillViewport = false
+                    addView(body, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+                }
+                AlertDialog.Builder(activity)
+                    .setTitle("当前页面 · 图片 ${images.size} · JSON ${cards.size}")
+                    .setView(scroll)
+                    .setPositiveButton("复制全部") { _, _ -> copyText(activity, "当前页面图片与卡片数据", combined) }
+                    .setNeutralButton("复制全部 JSON") { _, _ ->
+                        if (cards.isEmpty()) showInspectorToast("当前页面没有识别到 JSON / Ark 卡片")
+                        else copyText(activity, "当前页面 JSON / Ark 卡片", cards.joinToString("\n\n"))
+                    }
+                    .setNegativeButton("关闭", null)
+                    .showInspectorStyled(activity, .88f)
+                buildToolbar()
+            }
         }
     }
 
