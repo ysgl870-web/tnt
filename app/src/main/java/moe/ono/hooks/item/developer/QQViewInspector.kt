@@ -3260,11 +3260,12 @@ internal object QQInspectorLinks {
                         val document = runCatching { JSONObject(payload) }.getOrNull()
                         if (document != null) {
                             val source = "WebView DOM · ${webView.javaClass.simpleName}"
+                            val domEntries = ArrayList<LinkEntry>()
                             val urlRows = document.optJSONArray("links") ?: JSONArray()
                             for (i in 0 until urlRows.length()) {
                                 val raw = urlRows.optString(i).trim()
                                 if (sanitize(raw) != null && synchronized(links) { links.add(raw) }) {
-                                    add("WEBVIEW_DOM", raw, source, parentUrl = pageUrl)
+                                    domEntries.add(LinkEntry("WEBVIEW_DOM", raw, source, parentUrl = pageUrl))
                                 }
                             }
                             val imageRows = document.optJSONArray("images") ?: JSONArray()
@@ -3283,9 +3284,9 @@ internal object QQInspectorLinks {
                                         imageLocations[normalized] = location
                                         images.add(normalized)
                                     }) {
-                                    add(
-                                        "IMAGE_DOM", normalized, source, full = true,
-                                        parentUrl = pageUrl, location = location
+                                    domEntries.add(
+                                        LinkEntry("IMAGE_DOM", normalized, source, full = true,
+                                            parentUrl = pageUrl, location = location)
                                     )
                                 }
                             }
@@ -3294,12 +3295,15 @@ internal object QQInspectorLinks {
                                 val raw = cardRows.optString(i).trim()
                                 val validated = validateCardPayload(raw) ?: continue
                                 if (synchronized(cards) { cards.add(validated) }) {
-                                    add("CARD_JSON_DOM", validated, source, full = true, parentUrl = pageUrl)
+                                    domEntries.add(LinkEntry("CARD_JSON_DOM", validated, source, full = true, parentUrl = pageUrl))
                                     extractUrls(validated).forEach { candidate ->
-                                        if (sanitize(candidate) != null) synchronized(links) { links.add(candidate) }
+                                        if (sanitize(candidate) != null && synchronized(links) { links.add(candidate) }) {
+                                            domEntries.add(LinkEntry("CARD_JSON_LINK", candidate, source, parentUrl = pageUrl))
+                                        }
                                     }
                                 }
                             }
+                            addBatch(domEntries)
                         }
                         completeOne()
                     }
