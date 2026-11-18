@@ -111,7 +111,10 @@ internal object QQInspectorGeometry {
                     runCatching {
                         val currentObserver = root.viewTreeObserver
                         if (currentObserver.isAlive) currentObserver.removeOnGlobalLayoutListener(this)
-                        if (replacement.parent != null) {
+                        val stillTracked = synchronized(this@QQInspectorGeometry) {
+                            originals.containsKey(replacement)
+                        }
+                        if (stillTracked && replacement.parent != null) {
                             moveToScreen(replacement, targetPosition[0], targetPosition[1])
                         }
                     }
