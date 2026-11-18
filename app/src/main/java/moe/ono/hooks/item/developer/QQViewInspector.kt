@@ -49,6 +49,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.WeakHashMap
+import java.lang.ref.WeakReference
 import kotlin.math.max
 import kotlin.math.min
 
@@ -517,6 +518,7 @@ private object InspectorTree {
         val pageLinks = capturedPageLinks ?: runCatching {
             QQInspectorLinks.captureActivity(activity)
         }.getOrDefault(emptyList())
+        val pageUrl = QQInspectorLinks.currentPageUrl(activity)
         val rootOnScreen = IntArray(2)
         root.getLocationOnScreen(rootOnScreen)
 
@@ -550,6 +552,20 @@ private object InspectorTree {
                 val imageLinks = runCatching { collectImageLinks(view) }.getOrDefault(emptyList())
                 val cardJsons = runCatching { collectCardJson(view) }.getOrDefault(emptyList())
                 val cardLinks = cardJsons.flatMap { QQInspectorLinks.extractUrls(it) }
+                if (imageLinks.isNotEmpty()) {
+                    val location = "坐标：${rect.left},${rect.top} · 尺寸：${rect.width()}×${rect.height()} · ${view.javaClass.simpleName}"
+                    imageLinks.forEach { imageUrl ->
+                        QQInspectorLinks.add(
+                            "IMAGE_VIEW", imageUrl, "${view.javaClass.name}/$resourceId",
+                            full = true, parentUrl = pageUrl, location = location, previewView = view
+                        )
+                    }
+                }
+                if (cardJsons.isNotEmpty()) {
+                    cardJsons.forEach { card ->
+                        QQInspectorLinks.add("CARD_JSON_VIEW", card, "${view.javaClass.name}/$resourceId", full = true, parentUrl = pageUrl)
+                    }
+                }
                 result.add(
                     InspectorNode(
                         view = view,
@@ -2922,7 +2938,7 @@ internal object QQInspectorLinks {
         return scheme in setOf("http", "https", "mqq", "mqqapi", "mqqwpa", "qqdocurl", "qq", "tencent")
     }
 
-    private fun currentPageUrl(activity: Activity): String? = runCatching {
+    fun currentPageUrl(activity: Activity): String? = runCatching {
         val root = activity.findViewById<ViewGroup>(android.R.id.content) ?: return@runCatching activity.intent?.dataString
         var found: String? = null
         var scanned = 0
@@ -3056,12 +3072,33 @@ internal object QQInspectorLinks {
         val raw: String,
         val source: String,
         val full: Boolean = false,
-        val parentUrl: String? = null
+        val parentUrl: String? = null,
+        val location: String? = null
     )
 
-    fun add(kind: String, raw: String, source: String, full: Boolean = false, force: Boolean = false, parentUrl: String? = null) {
-        addBatch(listOf(LinkEntry(kind, raw, source, full, parentUrl)), force)
+    private val imageViewRefs = LinkedHashMap<String, WeakReference<View>>()
+
+    fun add(
+        kind: String,
+        raw: String,
+        source: String,
+        full: Boolean = false,
+        force: Boolean = false,
+        parentUrl: String? = null,
+        location: String? = null,
+        previewView: View? = null
+    ) {
+        if (previewView != null && isImageKind(kind)) synchronized(lock) {
+            imageViewRefs[raw] = WeakReference(previewView)
+            while (imageViewRefs.size > 120) imageViewRefs.remove(imageViewRefs.keys.first())
+        }
+        addBatch(listOf(LinkEntry(kind, raw, source, full, parentUrl, location)), force)
     }
+
+    fun findImagePreview(raw: String): android.graphics.drawable.Drawable? = runCatching {
+        val view = synchronized(lock) { imageViewRefs[raw]?.get() }
+        (view as? ImageView)?.drawable
+    }.getOrNull()
 
     /**
      * 批量写入：一次「读-改-写」，避免一条消息里 9 张图触发 9 次全量序列化。
@@ -3078,7 +3115,7 @@ internal object QQInspectorLinks {
             val value = if (entry.full || cardPayload) entry.raw.trim().take(if (cardPayload) 128_000 else 8192) else sanitized
             if (value.isBlank()) continue
             val parent = entry.parentUrl?.let(::sanitize).orEmpty()
-            prepared.add(arrayOf(entry, value, if (cardPayload) mask(value).take(2400) else mask(value), parent))
+            prepared.add(arrayOf(entry, value, if (cardPayload) mask(value).take(2400) else mask(value), parent, entry.location.orEmpty()))
         }
         if (prepared.isEmpty()) return
         synchronized(lock) {
@@ -3118,6 +3155,7 @@ internal object QQInspectorLinks {
                     .put("url", item[1] as String)
                     .put("display", item[2] as String)
                     .put("parentUrl", item[3] as String)
+                    .put("location", item[4] as String)
             )
         }
         config.edit().putString(STORAGE_KEY, next.toString()).apply()
@@ -3149,6 +3187,7 @@ internal object QQInspectorLinks {
                     .put("source", row.optString("source"))
                     .put("url", row.optString("url"))
                     .put("parentUrl", row.optString("parentUrl"))
+                    .put("location", row.optString("location"))
             )
         }
         array.toString(2)
