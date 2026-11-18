@@ -1279,21 +1279,21 @@ private class InspectorOverlay private constructor(
                         return@runSafely
                     }
                     if (pending != null) {
-                        pendingControlAction = null
                         if (selected.view === pending.target) {
                             showInspectorToast("请选择另一个控件，不能选择原控件自身")
+                            return@runSafely
+                        }
+                        pendingControlAction = null
+                        val ok = when (pending.action) {
+                            "swap" -> QQInspectorGeometry.swapPositions(pending.target, selected.view)
+                            "replace" -> QQInspectorGeometry.replaceAtPosition(pending.target, selected.view)
+                            else -> false
+                        }
+                        if (ok) {
+                            showInspectorToast(if (pending.action == "swap") "两个控件的位置已交换" else "已用所选控件顶替原控件；原控件已隐藏并保留布局占位，可随时恢复")
+                            refresh()
                         } else {
-                            val ok = when (pending.action) {
-                                "swap" -> QQInspectorGeometry.swapPositions(pending.target, selected.view)
-                                "replace" -> QQInspectorGeometry.replaceAtPosition(pending.target, selected.view)
-                                else -> false
-                            }
-                            if (ok) {
-                                showInspectorToast(if (pending.action == "swap") "两个控件的位置已交换" else "已用所选控件顶替原控件；原控件已隐藏并保留占位，可随时恢复")
-                                refresh()
-                            } else {
-                                showInspectorToast("操作失败：两个控件必须位于当前同一个 QQ 页面")
-                            }
+                            showInspectorToast("操作失败：两个控件必须位于当前同一个 QQ 页面，且不能互为父子控件")
                         }
                         pickMode = false
                         multiSelect = false
@@ -1776,9 +1776,19 @@ private class InspectorOverlay private constructor(
     private fun toggleBorders() {
         bordersVisible = !bordersVisible
         boxes.visibility = if (bordersVisible) View.VISIBLE else View.GONE
-        if (!bordersVisible && pickMode) {
-            pickMode = false
-            boxes.setPickMode(false)
+        if (!bordersVisible) {
+            if (pickMode) {
+                pickMode = false
+                boxes.setPickMode(false)
+            }
+            if (pendingControlAction != null) {
+                pendingControlAction = null
+                boxes.setPickAnyControl(false)
+            }
+            if (positionEditTarget != null) {
+                positionEditTarget = null
+                boxes.setEditTarget(null)
+            }
         }
         buildToolbar()
     }
