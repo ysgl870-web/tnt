@@ -1325,6 +1325,7 @@ private class InspectorOverlay private constructor(
         }
         boxes.setOnEditFinished {
             nodes = runCatching { InspectorTree.collect(activity) }.getOrDefault(nodes)
+            positionEditTarget?.let { QQInspectorGeometry.applySameClassFollow(it) }
             boxes.setNodes(nodes)
             updatePositionEditSummary()
         }
@@ -1531,6 +1532,16 @@ private class InspectorOverlay private constructor(
                 }, colors = intArrayOf(0xFF167D9E.toInt(), 0xFF9A4B64.toInt()))
         }
 
+        if (QQInspectorGeometry.activeFollowCount() > 0) {
+            addSection("SAME-CLASS FOLLOW  /  同类跟随", "按结构匹配同类控件；位置同步相对偏移，保留每个图片控件自己的图片内容")
+            addRow("管理跟随规则 · ${QQInspectorGeometry.activeFollowCount()}" to { showSameClassFollowManager() },
+                "取消全部跟随" to {
+                    val count = QQInspectorGeometry.clearAllSameClassFollows(restorePeers = true)
+                    buildToolbar()
+                    showInspectorToast("已取消 $count 组同类跟随规则")
+                }, colors = intArrayOf(0xFF416EA6.toInt(), 0xFF9B4C50.toInt()))
+        }
+
         addSection("VIEW CONTROL  /  控件操作", "点选控件后可查看、交换、顶替或调整位置")
         if (pendingControlAction != null) {
             addRow("取消本次交换 / 顶替" to {
@@ -1603,6 +1614,28 @@ private class InspectorOverlay private constructor(
                 }
             }
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(activity, 36)))
+    }
+
+    private fun showSameClassFollowManager() {
+        val rules = QQInspectorGeometry.activeFollowDescriptions()
+        if (rules.isEmpty()) {
+            showInspectorToast("当前没有启用的同类跟随规则")
+            return
+        }
+        AlertDialog.Builder(activity)
+            .setTitle("同类跟随 · ${rules.size} 组")
+            .setMessage(
+                rules.mapIndexed { index, label -> "${index + 1}. $label" }.joinToString("\n") +
+                    "\n\n逐条取消：重新选中对应控件，在控件详情中点击“取消同类跟随”。" +
+                    "\n取消规则后，已同步的同类控件会恢复到启用跟随前的状态；所选控件自身的修改会保留。"
+            )
+            .setPositiveButton("取消全部跟随") { _, _ ->
+                val count = QQInspectorGeometry.clearAllSameClassFollows(restorePeers = true)
+                buildToolbar()
+                showInspectorToast("已取消 $count 组同类跟随规则")
+            }
+            .setNegativeButton("关闭", null)
+            .showInspectorStyled(activity)
     }
 
     private fun showInspectorToast(message: String) {
@@ -1694,6 +1727,7 @@ private class InspectorOverlay private constructor(
         }
         pendingControlAction = null
         positionEditTarget = node.view
+        QQInspectorGeometry.beginEditing(node.view)
         pickMode = false
         multiSelect = false
         boxes.setMultiSelect(false)
@@ -2441,6 +2475,8 @@ private class InspectorOverlay private constructor(
             actions.add("交换位置")
             actions.add("顶替此控件")
             actions.add("位置控制")
+            actions.add("控件改变")
+            actions.add(if (QQInspectorGeometry.hasSameClassFollow(node.view)) "取消同类跟随" else "同类跟随")
             if (node.view.isEnabled) actions.add("禁用此控件")
             if (node.resourceId != "NO_ID") {
                 actions.add("持续隐藏（重进 QQ 仍生效）")
@@ -2559,6 +2595,20 @@ private class InspectorOverlay private constructor(
                     "交换位置" -> startControlSelection(node.view, "swap")
                     "顶替此控件" -> startControlSelection(node.view, "replace")
                     "位置控制" -> startPositionControl(node)
+                    "控件改变" -> QQInspectorStyleEditor.show(activity, node.view) { changed ->
+                        refresh()
+                        showInspectorToast(if (changed > 0) "已应用 $changed 项控件样式修改" else "未应用样式修改")
+                    }
+                    "同类跟随" -> {
+                        val count = QQInspectorGeometry.enableSameClassFollow(node.view)
+                        buildToolbar()
+                        showInspectorToast(if (count >= 0) "同类跟随已开启，当前同步 $count 个控件；后续同类控件出现时也会自动应用" else "无法为此控件建立同类跟随")
+                    }
+                    "取消同类跟随" -> {
+                        val restored = QQInspectorGeometry.cancelSameClassFollow(node.view)
+                        buildToolbar()
+                        showInspectorToast("已取消同类跟随，并还原跟随控件 $restored 个；所选控件自身设置保留")
+                    }
                     "禁用此控件" -> {
                         if (canModify(node) && InspectorControlState.disable(node.view)) {
                             showInspectorToast("控件已临时禁用，点“恢复控件”可还原")
