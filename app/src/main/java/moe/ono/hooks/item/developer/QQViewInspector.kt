@@ -2004,7 +2004,10 @@ private class InspectorOverlay private constructor(
         val labels = groups.map { (url, events) ->
             val latest = events.maxByOrNull { it.optLong("time") }
             val display = latest?.optString("display", url).orEmpty().replace('\n', ' ')
-            "${events.size} 次捕获 · ${display.take(150)}\n最近：${format.format(Date(latest?.optLong("time") ?: 0L))}"
+            val location = latest?.optString("location").orEmpty()
+            "${events.size} 次捕获 · ${display.take(120)}" +
+                (if (category == "图片直链" && location.isNotBlank()) "\n出现位置：${location.take(84)}" else "") +
+                "\n最近：${format.format(Date(latest?.optLong("time") ?: 0L))}"
         }.toTypedArray()
         AlertDialog.Builder(activity)
             .setTitle("$category · ${groups.size} 个不同内容")
@@ -2025,7 +2028,10 @@ private class InspectorOverlay private constructor(
             val time = format.format(Date(row.optLong("time")))
             val source = row.optString("source", "未知来源")
             val parent = row.optString("parentUrl")
-            "$time\n来源：$source" + if (parent.isNotBlank()) "\n上级：${QQInspectorLinks.mask(parent).take(120)}" else ""
+            val location = row.optString("location")
+            "$time\n来源：$source" +
+                (if (category == "图片直链" && location.isNotBlank()) "\n出现位置：${location.take(100)}" else "") +
+                if (parent.isNotBlank()) "\n上级：${QQInspectorLinks.mask(parent).take(120)}" else ""
         }.toTypedArray()
         AlertDialog.Builder(activity)
             .setTitle("$category · ${sorted.size} 次捕获")
@@ -2092,6 +2098,33 @@ private class InspectorOverlay private constructor(
         textLine("分类：$category")
         textLine("抓取到的链接", true)
         textLine(display)
+        if (category == "图片直链") {
+            val location = row.optString("location").ifBlank { "暂未记录具体控件坐标，可查看捕获来源：${row.optString("source")}" }
+            textLine("图片所在位置", true)
+            textLine(location)
+            val preview = QQInspectorLinks.findImagePreview(url)
+            if (preview != null) {
+                panel.addView(ImageView(activity).apply {
+                    scaleType = ImageView.ScaleType.FIT_CENTER
+                    adjustViewBounds = true
+                    maxHeight = dp(activity, 220)
+                    setImageDrawable(preview.constantState?.newDrawable()?.mutate() ?: preview)
+                    contentDescription = "当前页面图片预览"
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(activity, 12).toFloat()
+                        setColor(0xFFE7EFF7.toInt())
+                        setStroke(dp(activity, 1), 0xFFB9D2E4.toInt())
+                    }
+                    setPadding(dp(activity, 6), dp(activity, 6), dp(activity, 6), dp(activity, 6))
+                }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(activity, 190)).apply {
+                    topMargin = dp(activity, 8)
+                    bottomMargin = dp(activity, 8)
+                })
+                textLine("预览来自当前页面已显示的图片控件；若页面已切换，则保留出现位置记录。")
+            } else {
+                textLine("当前页面已无法取得该图片控件的本地预览，仍可根据上面的来源与坐标定位。")
+            }
+        }
         textLine("上级界面链接", true)
         textLine(if (parent.isNotBlank()) QQInspectorLinks.mask(parent) else "未捕获到上级界面链接。该跳转可能没有可读取的来源 Activity / WebView URL。")
         if (display != url) textLine("提示：展示内容已隐藏部分签名参数，实际跳转和复制使用完整链接。")
