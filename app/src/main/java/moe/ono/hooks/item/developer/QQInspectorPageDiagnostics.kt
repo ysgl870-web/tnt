@@ -84,6 +84,8 @@ internal object QQInspectorDiagnostics {
             textSize = 12f
             setTextColor(0xFF243B50.toInt())
             setTextIsSelectable(true)
+            setHorizontallyScrolling(false)
+            breakStrategy = android.text.Layout.BREAK_STRATEGY_HIGH_QUALITY
             setPadding(dp(4), dp(12), dp(4), dp(12))
             setLineSpacing(dp(3).toFloat(), 1f)
         }
@@ -91,8 +93,10 @@ internal object QQInspectorDiagnostics {
             isFillViewport = false
             addView(body, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
-        root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(420)))
-        AlertDialog.Builder(activity)
+        val scrollHeight = (activity.resources.displayMetrics.heightPixels * .66f)
+            .toInt().coerceAtMost(dp(600)).coerceAtLeast(dp(260))
+        root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, scrollHeight))
+        val dialog = AlertDialog.Builder(activity)
             .setTitle("黑壳区 · 页面诊断")
             .setView(root)
             .setPositiveButton("复制诊断报告") { _, _ ->
@@ -106,7 +110,21 @@ internal object QQInspectorDiagnostics {
             }
             .setNeutralButton("重新诊断") { _, _ -> show(activity) }
             .setNegativeButton("关闭", null)
-            .show()
+            .create()
+        dialog.show()
+        dialog.window?.let { window ->
+            val metrics = activity.resources.displayMetrics
+            window.setBackgroundDrawable(GradientDrawable().apply {
+                cornerRadius = dp(22).toFloat()
+                setColor(0xFFF7FAFD.toInt())
+                setStroke(dp(1), 0x9957BFE5.toInt())
+            })
+            window.setLayout(
+                (metrics.widthPixels * .92f).toInt().coerceAtMost(dp(520)),
+                (metrics.heightPixels * .86f).toInt().coerceAtMost(dp(720))
+            )
+            window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        }
     }
 
     private fun buildReport(activity: Activity): String {
