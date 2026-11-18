@@ -40,6 +40,15 @@ internal object QQInspectorGeometry {
         )
     }
 
+    private fun isAncestor(ancestor: View, descendant: View): Boolean {
+        var current = descendant.parent
+        while (current is View) {
+            if (current === ancestor) return true
+            current = current.parent
+        }
+        return false
+    }
+
     private fun screenPosition(view: View): IntArray = IntArray(2).also(view::getLocationOnScreen)
 
     private fun moveToScreen(view: View, left: Int, top: Int) {
@@ -61,6 +70,8 @@ internal object QQInspectorGeometry {
     fun swapPositions(first: View, second: View): Boolean = runCatching {
         if (first === second || first.parent == null || second.parent == null) return false
         if (first.windowToken == null || second.windowToken == null || first.rootView !== second.rootView) return false
+        // Moving a parent and one of its descendants independently produces ambiguous geometry.
+        if (isAncestor(first, second) || isAncestor(second, first)) return false
         val firstPosition = screenPosition(first)
         val secondPosition = screenPosition(second)
         remember(first)
@@ -78,6 +89,7 @@ internal object QQInspectorGeometry {
     fun replaceAtPosition(target: View, replacement: View): Boolean = runCatching {
         if (target === replacement || target.parent == null || replacement.parent == null) return false
         if (target.windowToken == null || replacement.windowToken == null || target.rootView !== replacement.rootView) return false
+        if (isAncestor(target, replacement) || isAncestor(replacement, target)) return false
         val targetPosition = screenPosition(target)
         val targetWidth = target.width.coerceAtLeast(1)
         val targetHeight = target.height.coerceAtLeast(1)
