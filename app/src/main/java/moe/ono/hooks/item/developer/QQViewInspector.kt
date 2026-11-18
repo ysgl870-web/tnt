@@ -708,11 +708,20 @@ private object InspectorTree {
                     else -> null
                 }
             }.getOrNull() ?: return
-            if (cardLike || InspectorReflectionCache.matches(parsed, "(ark|app|meta|prompt|view|config|jumpUrl|qqdocurl|schema)")) found.add(parsed)
+            val hasProtocolShape = InspectorReflectionCache.matches(
+                parsed,
+                "(ark|appid|meta|prompt|view|config|jumpUrl|jump_url|qqdocurl|schema|share|struct|appurl)"
+            )
+            val hasWebCardShape =
+                InspectorReflectionCache.matches(parsed, "(title|name)") &&
+                    InspectorReflectionCache.matches(parsed, "(url|jump|image|img|preview)") &&
+                    InspectorReflectionCache.matches(parsed, "(desc|description|meta|app|news|card|share)")
+            if (cardLike || hasProtocolShape || hasWebCardShape) found.add(parsed)
         }
-        if (view is TextView && !view.text.isNullOrBlank()) accept(view.text.toString())
+        if (view is TextView && view !is EditText && !view.text.isNullOrBlank()) accept(view.text.toString())
         fun inspectCardObject(value: Any?) {
             if (value == null || value is String || value is Number || value is Boolean) return
+            if (cardLike) accept(value.toString())
             InspectorReflectionCache.fields(value.javaClass, "(ark|card|json|payload|extra|meta|struct|share)").take(32).forEach { field ->
                 runCatching { field.isAccessible = true; accept(field.get(value)) }
             }
@@ -2929,7 +2938,7 @@ internal object QQInspectorLinks {
         val root = runCatching { activity.findViewById<ViewGroup>(android.R.id.content) }.getOrNull()
         var inspected = 0
         fun walk(view: View) {
-            if (inspected++ > 360) return
+            if (inspected++ > 1200) return
             if (view is InspectorOverlay || view.tag == "tnt.qq.inspector.entry") return
             if (view.visibility != View.VISIBLE || view.alpha <= 0.03f) return
             val className = view.javaClass.name
@@ -2948,15 +2957,38 @@ internal object QQInspectorLinks {
                     }
                 }
             }
-            if (view is TextView && view !is EditText) {
-                val content = runCatching { view.text?.toString() }.getOrNull()
-                // 只解析短文本，避免把长聊天记录整段扫一遍
-                if (!content.isNullOrBlank() && content.length in 8..4000) {
-                    extractUrls(content).take(10).forEach { url ->
-                        add("VIEW_TEXT", url, activity.javaClass.simpleName + "/" + className, parentUrl = parentUrl)
-                        sanitize(url)?.let(found::add)
+            fun inspectVisibleValue(rawValue: String?, source: String) {
+                val content = rawValue?.trim().orEmpty()
+                if (content.isBlank() || content.length > 120_000) return
+                extractUrls(content).take(20).forEach { url ->
+                    add("VIEW_TEXT", url, activity.javaClass.simpleName + "/$className/$source", parentUrl = parentUrl)
+                    sanitize(url)?.let(found::add)
+                }
+                if ((content.startsWith("{") || content.startsWith("[")) && content.length >= 8) {
+                    val isJson = validateCardPayload(content) != null
+                    val looksLikeCard = InspectorReflectionCache.matches(
+                        content,
+                        "(ark|appid|jumpUrl|qqdocurl|schema|share|meta|prompt|title.*url|url.*title)"
+                    )
+                    if (isJson && looksLikeCard) {
+                        add("CARD_JSON_VIEW", content, activity.javaClass.simpleName + "/$className/$source",
+                            full = true, parentUrl = parentUrl)
                     }
                 }
+            }
+            inspectVisibleValue(view.contentDescription?.toString(), "contentDescription")
+            inspectVisibleValue(view.tag?.toString(), "tag")
+            inspectUrlModel(view.tag, "$className.tag") { value, source ->
+                val raw = (value as? String)?.trim().orEmpty()
+                if (looksLikeLink(raw)) {
+                    add("VIEW_MODEL_LINK", raw, "$className/$source", parentUrl = parentUrl)
+                    sanitize(raw)?.let(found::add)
+                }
+            }
+            if (view is TextView && view !is EditText) {
+                val content = runCatching { view.text?.toString() }.getOrNull()
+                // Parse visible text only; never read EditText/input fields automatically.
+                if (!content.isNullOrBlank() && content.length in 8..8000) inspectVisibleValue(content, "text")
             }
             if (view is ViewGroup) {
                 for (i in 0 until view.childCount) walk(view.getChildAt(i))
