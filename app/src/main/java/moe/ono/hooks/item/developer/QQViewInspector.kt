@@ -1293,7 +1293,14 @@ private class InspectorOverlay private constructor(
                         }
                         if (ok) {
                             showInspectorToast(if (pending.action == "swap") "两个控件的位置已交换" else "顶替完成：原控件已退出布局，所选控件已占据原位置；可随时恢复")
-                            refresh()
+                            if (pending.action == "replace") {
+                                // Wait for the host's GONE/reflow pass and replacement alignment.
+                                boxes.postDelayed({
+                                    if (!activity.isFinishing && !activity.isDestroyed && parent != null) refresh()
+                                }, 120L)
+                            } else {
+                                refresh()
+                            }
                         } else {
                             showInspectorToast("操作失败：两个控件必须位于当前同一个 QQ 页面，且不能互为父子控件")
                         }
