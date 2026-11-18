@@ -1299,6 +1299,7 @@ private class InspectorOverlay private constructor(
                         pickMode = false
                         multiSelect = false
                         boxes.setPickMode(false)
+                        boxes.setPickAnyControl(false)
                         boxes.setMultiSelect(false)
                         boxes.setSelectedViews(emptyList())
                         selectedViews.clear()
@@ -1521,7 +1522,17 @@ private class InspectorOverlay private constructor(
                 }, colors = intArrayOf(0xFF167D9E.toInt(), 0xFF9A4B64.toInt()))
         }
 
-        addSection("VIEW CONTROL  /  控件操作", "点选控件后可查看详情或执行可恢复操作")
+        addSection("VIEW CONTROL  /  控件操作", "点选控件后可查看、交换、顶替或调整位置")
+        if (pendingControlAction != null) {
+            addRow("取消本次交换 / 顶替" to {
+                pendingControlAction = null
+                boxes.setPickAnyControl(false)
+                pickMode = false
+                boxes.setPickMode(false)
+                buildToolbar()
+                showInspectorToast("已取消控件选择操作")
+            }, colors = intArrayOf(0xFF9B4C50.toInt(), 0xFF70415F.toInt()))
+        }
         addRow((if (pickMode) "●  点选模式：开" else "○  点选模式：关") to { togglePickMode() },
             (if (multiSelect) "▣  多选：开 · ${selectedViews.size}" else "▢  多选模式：关") to { toggleMultiSelect() },
             colors = intArrayOf(0xFF087DBB.toInt(), 0xFF15518C.toInt()))
@@ -1657,6 +1668,7 @@ private class InspectorOverlay private constructor(
         pendingControlAction = PendingControlAction(target, action)
         positionEditTarget = null
         boxes.setEditTarget(null)
+        boxes.setPickAnyControl(true)
         pickMode = true
         multiSelect = false
         boxes.setMultiSelect(false)
@@ -1742,6 +1754,10 @@ private class InspectorOverlay private constructor(
         if (positionEditTarget != null) {
             finishPositionControl()
             return
+        }
+        if (pendingControlAction != null) {
+            pendingControlAction = null
+            boxes.setPickAnyControl(false)
         }
         pickMode = !pickMode
         boxes.setPickMode(pickMode)
@@ -2611,6 +2627,10 @@ private class InspectorOverlay private constructor(
 
     private fun close() {
         QQInspectorRuntime.setPanelOpen(false)
+        pendingControlAction = null
+        positionEditTarget = null
+        boxes.setPickAnyControl(false)
+        boxes.setEditTarget(null)
         (parent as? ViewGroup)?.removeView(this)
         QQInspectorRuntime.attach(activity)
     }
@@ -2656,6 +2676,7 @@ private class InspectorOverlay private constructor(
         private var pressedNode: InspectorNode? = null
         private var onSelected: ((InspectorNode) -> Unit)? = null
         private var pickMode = false
+        private var pickAnyControl = false
         private var multiSelect = false
         private var editTarget: View? = null
         private var editMode = false
@@ -2702,6 +2723,11 @@ private class InspectorOverlay private constructor(
             pressedNode = null
         }
 
+        fun setPickAnyControl(enabled: Boolean) {
+            pickAnyControl = enabled
+            invalidate()
+        }
+
         fun setEditTarget(target: View?) {
             editTarget = target
             editMode = target != null
@@ -2722,9 +2748,10 @@ private class InspectorOverlay private constructor(
             nodes = value
             val minArea = (dp(context, 9) * dp(context, 9)).toLong()
             drawnNodes = value.filter {
-                it.view === editTarget || (it.area >= minArea && (it.view is ImageView || it.clickable || it.longClickable ||
+                it.view === editTarget || (it.area >= minArea && (pickAnyControl ||
+                    it.view is ImageView || it.clickable || it.longClickable ||
                     it.directLinks.isNotEmpty() || it.imageLinks.isNotEmpty() || (it.focusable && it.childCount == 0)))
-            }.take(120)
+            }.take(if (pickAnyControl) 180 else 120)
             invalidate()
         }
 
