@@ -1470,6 +1470,30 @@ private class InspectorOverlay private constructor(
             "⇄  Scheme / URL 跳板" to { QQInspectorBridgeDialog.show(activity) },
             colors = intArrayOf(0xFF7357D8.toInt(), 0xFF236DBB.toInt()))
 
+        if (positionEditTarget != null) {
+            addSection("POSITION CONTROL  /  精细位置控制", "拖动控件边框移动；拖动右下角可调整大小")
+            toolbar.addView(TextView(activity).apply {
+                tag = "tnt.position.summary"
+                text = "正在读取控件位置…"
+                textSize = 10f
+                setTextColor(0xFFD6F0FF.toInt())
+                setPadding(dp(activity, 6), dp(activity, 5), dp(activity, 6), dp(activity, 8))
+            })
+            addRow("↑  上移" to { adjustPosition(dyDp = -1) }, "↓  下移" to { adjustPosition(dyDp = 1) })
+            addRow("←  左移" to { adjustPosition(dxDp = -1) }, "→  右移" to { adjustPosition(dxDp = 1) })
+            addRow("宽度 −" to { adjustPosition(dwDp = -1) }, "宽度 ＋" to { adjustPosition(dwDp = 1) })
+            addRow("高度 −" to { adjustPosition(dhDp = -1) }, "高度 ＋" to { adjustPosition(dhDp = 1) })
+            addRow("步进 1dp" to { positionStepDp = 1; buildToolbar(); updatePositionEditSummary() },
+                "步进 5dp" to { positionStepDp = 5; buildToolbar(); updatePositionEditSummary() },
+                "步进 10dp" to { positionStepDp = 10; buildToolbar(); updatePositionEditSummary() })
+            addRow("退出位置控制" to { finishPositionControl() },
+                "还原全部位置" to {
+                    val count = QQInspectorGeometry.restoreAll()
+                    finishPositionControl()
+                    showInspectorToast("已还原 $count 个控件的位置与大小")
+                }, colors = intArrayOf(0xFF167D9E.toInt(), 0xFF9A4B64.toInt()))
+        }
+
         addSection("VIEW CONTROL  /  控件操作", "点选控件后可查看详情或执行可恢复操作")
         addRow((if (pickMode) "●  点选模式：开" else "○  点选模式：关") to { togglePickMode() },
             (if (multiSelect) "▣  多选：开 · ${selectedViews.size}" else "▢  多选模式：关") to { toggleMultiSelect() },
@@ -1688,6 +1712,10 @@ private class InspectorOverlay private constructor(
     }
 
     private fun togglePickMode() {
+        if (positionEditTarget != null) {
+            finishPositionControl()
+            return
+        }
         pickMode = !pickMode
         boxes.setPickMode(pickMode)
         if (!pickMode && multiSelect) {
