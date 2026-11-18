@@ -1913,7 +1913,7 @@ private class InspectorOverlay private constructor(
             .setMessage("网页链接会优先通过 QQ 内置浏览器打开；QQ Scheme 会保留原协议交给 QQ/TIM 处理，无法接管时再回退到系统浏览器。\n\n$url\n\n请确认链接来源可信。")
             .setPositiveButton("确认跳转") { _, _ -> openHistoryUrl(url, preferQQ = true) }
             .setNegativeButton("取消", null)
-            .show()
+            .showInspectorStyled(activity)
     }
 
     /**
@@ -1953,7 +1953,22 @@ private class InspectorOverlay private constructor(
             }
         }
         dialog.show()
-        dialog.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+        dialog.window?.let { window ->
+            val metrics = activity.resources.displayMetrics
+            window.setBackgroundDrawable(GradientDrawable().apply {
+                cornerRadius = dp(activity, 18).toFloat()
+                setColor(0xFFF7FAFD.toInt())
+                setStroke(dp(activity, 1), 0x9957BFE5.toInt())
+            })
+            window.setLayout(
+                (metrics.widthPixels * .92f).toInt().coerceAtMost(dp(activity, 500)),
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            window.setSoftInputMode(
+                android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE or
+                    android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+            )
+        }
     }
 
     private fun showControlSearchResults(query: String) {
@@ -1979,7 +1994,7 @@ private class InspectorOverlay private constructor(
                 searchControls()
             }
             .setNegativeButton("关闭", null)
-            .show()
+            .showInspectorStyled(activity)
     }
 
     private fun showList() {
@@ -1994,7 +2009,7 @@ private class InspectorOverlay private constructor(
             .setTitle("控件列表（共 ${nodes.size} 个，显示前 ${shownNodes.size} 个）")
             .setItems(labels) { _, which -> shownNodes.getOrNull(which)?.let { runSafely { showNode(it) } } }
             .setNegativeButton("关闭", null)
-            .show()
+            .showInspectorStyled(activity)
     }
 
     private fun showNode(node: InspectorNode) {
@@ -2091,7 +2106,11 @@ private class InspectorOverlay private constructor(
         val content = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(activity, 16), dp(activity, 12), dp(activity, 16), dp(activity, 12))
-            setBackgroundColor(0xEAF4F7FB.toInt())
+            background = GradientDrawable().apply {
+                cornerRadius = dp(activity, 16).toFloat()
+                setColor(0xFFF1F6FB.toInt())
+                setStroke(dp(activity, 1), 0xB8DCE6F0.toInt())
+            }
         }
         val detailText = TextView(activity).apply {
             text = message
@@ -2239,7 +2258,11 @@ private class InspectorOverlay private constructor(
         }
         dialog.show()
         dialog.window?.let { window ->
-            window.setBackgroundDrawableResource(android.R.color.transparent)
+            window.setBackgroundDrawable(GradientDrawable().apply {
+                cornerRadius = dp(activity, 22).toFloat()
+                setColor(0xFFF4F8FC.toInt())
+                setStroke(dp(activity, 1), 0x9957BFE5.toInt())
+            })
             window.addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
             val attrs = window.attributes
             attrs.dimAmount = 0.22f
@@ -2255,10 +2278,10 @@ private class InspectorOverlay private constructor(
     private fun confirmOpenLink(url: String, label: String) {
         AlertDialog.Builder(activity)
             .setTitle(if (label == "图片直链") "打开图片直链？" else "优先在 QQ 中打开？")
-            .setMessage("$label：\n$url\n\n普通跳转会先尝试 QQ / TIM；如果没有匹配的 QQ 页面入口，再交给系统默认应用。")
+            .setMessage("$label：\n$url\n\n普通网页链接优先通过 QQ 内置浏览器打开；QQ Scheme 则保留原协议交给 QQ/TIM 处理。")
             .setPositiveButton("确认跳转") { _, _ -> openHistoryUrl(url, preferQQ = label != "图片直链") }
             .setNegativeButton("取消", null)
-            .show()
+            .showInspectorStyled(activity)
     }
 
     private fun nodeJson(node: InspectorNode) = JSONObject()
