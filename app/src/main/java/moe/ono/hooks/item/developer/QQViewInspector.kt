@@ -1331,7 +1331,10 @@ private class InspectorOverlay private constructor(
             }
         }
         boxes.setOnEditFinished {
-            positionEditTarget?.let { QQInspectorGeometry.finishEditing(it) }
+            positionEditTarget?.let {
+                QQInspectorGeometry.finishEditing(it)
+                QQInspectorPersistentControls.save(activity, it)
+            }
             nodes = runCatching { InspectorTree.collect(activity) }.getOrDefault(nodes)
             boxes.setNodes(nodes)
             updatePositionEditSummary()
@@ -1770,6 +1773,7 @@ private class InspectorOverlay private constructor(
         if (dxDp != 0 || dyDp != 0) QQInspectorGeometry.moveBy(target, dxDp * unit, dyDp * unit)
         if (dwDp != 0 || dhDp != 0) QQInspectorGeometry.resizeBy(target, dwDp * unit, dhDp * unit)
         QQInspectorGeometry.finishEditing(target)
+        QQInspectorPersistentControls.save(activity, target)
         boxes.invalidate()
         updatePositionEditSummary()
     }
