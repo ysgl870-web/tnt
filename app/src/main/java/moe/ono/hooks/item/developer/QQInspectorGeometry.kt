@@ -72,6 +72,7 @@ internal object QQInspectorGeometry {
     private val originals = WeakHashMap<View, Snapshot>()
     private val elevatedContainers = WeakHashMap<ViewGroup, ContainerLayerState>()
     private val visualOwners = WeakHashMap<View, List<ViewGroup>>()
+    private val visualPriorities = WeakHashMap<View, Float>()
     private var visualOrderSerial = 0
     // A bounded strong map keeps rules alive while RecyclerView rows are detached/recycled.
     private val followRules = LinkedHashMap<View, FollowRule>()
@@ -156,6 +157,10 @@ internal object QQInspectorGeometry {
         if (view.parent == null) return
         val density = view.resources.displayMetrics.density
         val raisedZ = 64f * density
+        visualOrderSerial = (visualOrderSerial + 1) % 1000
+        val orderingOffset = visualOrderSerial * 0.001f * density
+        val priority = raisedZ + orderingOffset
+
         val ancestors = ArrayList<ViewGroup>(8)
         var current = view.parent
         val root = view.rootView
@@ -174,24 +179,24 @@ internal object QQInspectorGeometry {
             group.clipChildren = false
             group.clipToPadding = false
             if (group.clipToOutline) group.clipToOutline = false
-            if (group.translationZ < raisedZ) group.translationZ = raisedZ
+            if (group.translationZ < priority) group.translationZ = priority
             current = group.parent
         }
         visualOwners[view] = ancestors
+        visualPriorities[view] = priority
 
-        // Keep edited controls above the host's original overlays while preserving
-        // their own elevation as much as possible. A tiny serial offset gives a
-        // deterministic order when two edited controls overlap.
-        visualOrderSerial = (visualOrderSerial + 1) % 1000
-        val orderingOffset = visualOrderSerial * 0.001f * density
-        view.translationZ = maxOf(view.translationZ, raisedZ + orderingOffset)
+        // Elevate both the edited View and each containing branch. Raising only the
+        // child is insufficient when a sibling belongs to a later-drawn parent branch.
+        view.translationZ = maxOf(view.translationZ, priority)
         view.invalidate()
     }
 
     @Synchronized
     private fun releaseVisualPriority(view: View) {
         visualOwners.remove(view)
-        val stillUsed = visualOwners.values.flatten().toHashSet()
+        visualPriorities.remove(view)
+        val activeEntries = visualOwners.entries.map { it.key to it.value }
+        val stillUsed = activeEntries.flatMap { it.second }.toHashSet()
         val noLongerUsed = elevatedContainers.keys.filter { it !in stillUsed }
         noLongerUsed.forEach { group ->
             val state = elevatedContainers.remove(group) ?: return@forEach
@@ -202,6 +207,16 @@ internal object QQInspectorGeometry {
                 group.clipToOutline = state.clipToOutline
                 group.invalidate()
             }
+        }
+
+        // If a higher-priority edit was restored while another edit still uses the
+        // same ancestor, recompute the branch Z rather than leaving a stale high value.
+        elevatedContainers.forEach { (group, state) ->
+            val maxPriority = activeEntries
+                .filter { (_, ancestors) -> group in ancestors }
+                .mapNotNull { (owner, _) -> visualPriorities[owner] }
+                .maxOrNull()
+            group.translationZ = maxOf(state.translationZ, maxPriority ?: state.translationZ)
         }
     }
 
