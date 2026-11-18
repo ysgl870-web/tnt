@@ -2005,14 +2005,18 @@ private class InspectorOverlay private constructor(
     private fun saveCurrentLinks() {
         val activityLinks = QQInspectorLinks.captureActivity(activity)
         val visibleNodes = InspectorTree.collect(activity)
-        val discovered = (activityLinks + visibleNodes.flatMap { it.links }).distinct()
-        if (discovered.isEmpty()) {
-            showInspectorToast("当前 Activity 暂未发现 Intent 或 WebView 链接")
-            return
-        }
-        discovered.forEach { QQInspectorLinks.add("MANUAL_SAVE", it, "手动保存当前页面") }
+        val imageUrls = visibleNodes.flatMap { it.imageLinks }.toSet()
+        val cardPayloads = visibleNodes.flatMap { it.cardJsons }.toSet()
+        val discovered = (activityLinks + visibleNodes.flatMap { it.directLinks + it.links })
+            .filterNot { it in imageUrls || it in cardPayloads }
+            .distinct()
+        val known = QQInspectorLinks.readAll().map { it.optString("url") }.toSet()
+        val newLinks = discovered.filterNot { it in known }
+        newLinks.forEach { QQInspectorLinks.add("MANUAL_SAVE", it, "手动保存当前页面") }
         val total = QQInspectorLinks.readAll().size
-        showInspectorToast("已保存 ${discovered.size} 个页面链接，历史共 ${total} 条")
+        showInspectorToast(
+            "已更新当前页记录：链接 ${discovered.size}（新增 ${newLinks.size}）· 图片 ${imageUrls.size} · JSON ${cardPayloads.size} · 历史 ${total}"
+        )
     }
 
     /** 链接记录按图片直链 / 卡片 JSON / 跳转链接分类，同一内容合并显示捕获次数。 */
