@@ -225,7 +225,7 @@ internal object QQInspectorStyleEditor {
             )
             sizeEnabled = pair.first
             sizeInput = pair.second
-            sizeInput.setText(((target as TextView).textSize / density).toInt().toString())
+            pair.second.setText(((target as TextView).textSize / density).toInt().toString())
             content.addView(sizeEnabled)
             content.addView(sizeInput)
         } else {
