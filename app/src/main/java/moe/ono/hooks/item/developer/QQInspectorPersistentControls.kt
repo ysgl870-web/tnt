@@ -129,7 +129,7 @@ internal object QQInspectorPersistentControls {
                     if (visited >= 1400 || depth > 36) return
                     visited++
                     if (view !== root && view.id != View.NO_ID && view.parent is ViewGroup &&
-                        view !is InspectorOverlay && view.tag != "tnt.qq.inspector.entry"
+                        view.javaClass.simpleName != "InspectorOverlay" && view.tag != "tnt.qq.inspector.entry"
                     ) {
                         val parent = view.parent as ViewGroup
                         val sig = Signature(
