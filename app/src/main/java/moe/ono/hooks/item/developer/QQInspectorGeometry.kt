@@ -13,6 +13,7 @@ import android.widget.TextView
 import java.util.WeakHashMap
 import java.util.LinkedHashMap
 import kotlin.math.abs
+import org.json.JSONObject
 
 /**
  * Reversible, in-memory geometry and style edits for the currently attached QQ view tree.
@@ -72,8 +73,9 @@ internal object QQInspectorGeometry {
     private val originals = WeakHashMap<View, Snapshot>()
     private val elevatedContainers = WeakHashMap<ViewGroup, ContainerLayerState>()
     private val visualOwners = WeakHashMap<View, List<ViewGroup>>()
+    private val raisedViews = WeakHashMap<View, Float>()
+    private val raisedViewOwners = WeakHashMap<View, List<View>>()
     private val visualPriorities = WeakHashMap<View, Float>()
-    private var visualOrderSerial = 0
     // A bounded strong map keeps rules alive while RecyclerView rows are detached/recycled.
     private val followRules = LinkedHashMap<View, FollowRule>()
 
@@ -111,7 +113,101 @@ internal object QQInspectorGeometry {
     @Synchronized
     fun beginEditing(view: View) {
         remember(view)
+    }
+
+    /** Finalize one gesture: expensive sibling synchronization and z-order work happens once. */
+    @Synchronized
+    fun finishEditing(view: View) {
+        if (view.parent == null) return
         applyVisualPriority(view)
+        applySameClassFollow(view)
+    }
+
+    /**
+     * Return only properties explicitly changed from the first edit snapshot.
+     * This avoids persisting volatile QQ-bound text such as each user's nickname.
+     */
+    @Synchronized
+    fun exportPersistentState(view: View): JSONObject? {
+        val original = originals[view] ?: return null
+        val result = JSONObject()
+        val dx = view.translationX - original.translationX
+        val dy = view.translationY - original.translationY
+        if (abs(dx) > 0.05f) result.put("dx", dx.toDouble())
+        if (abs(dy) > 0.05f) result.put("dy", dy.toDouble())
+        val params = view.layoutParams
+        val width = params?.width ?: view.width
+        val height = params?.height ?: view.height
+        if (width != original.layoutWidth && width > 0) result.put("width", width)
+        if (height != original.layoutHeight && height > 0) result.put("height", height)
+        if (abs(view.alpha - original.alpha) > 0.001f) result.put("alpha", view.alpha.toDouble())
+
+        if (view is TextView) {
+            if (view.text?.toString() != original.text?.toString()) {
+                result.put("text", view.text?.toString().orEmpty().take(120))
+            }
+            if (view.textColors.defaultColor != original.textColors?.defaultColor) {
+                result.put("textColor", view.textColors.defaultColor)
+            }
+            if (abs(view.textSize - original.textSizePx) > 0.5f) {
+                result.put("textSizePx", view.textSize.toDouble())
+            }
+        }
+        if (view.backgroundTintList?.defaultColor != original.backgroundTint?.defaultColor &&
+            view.backgroundTintList != null
+        ) {
+            result.put("backgroundTint", view.backgroundTintList!!.defaultColor)
+        } else {
+            val color = (view.background as? ColorDrawable)?.color
+            val oldColor = original.background?.let { (it as? ColorDrawable)?.color }
+            if (color != null && color != oldColor) result.put("backgroundColor", color)
+        }
+        if (view is ImageView && view.imageTintList?.defaultColor != original.imageTint?.defaultColor &&
+            view.imageTintList != null
+        ) {
+            result.put("imageTint", view.imageTintList!!.defaultColor)
+        }
+        return result.takeIf { it.length() > 0 }
+    }
+
+    @Synchronized
+    fun applyPersistentState(view: View, state: JSONObject) {
+        if (view.parent == null || state.length() == 0) return
+        remember(view)
+        var geometryChanged = false
+        if (state.has("dx")) {
+            view.translationX = originals[view]!!.translationX + state.optDouble("dx").toFloat()
+            geometryChanged = true
+        }
+        if (state.has("dy")) {
+            view.translationY = originals[view]!!.translationY + state.optDouble("dy").toFloat()
+            geometryChanged = true
+        }
+        val params = view.layoutParams
+        if (params != null) {
+            if (state.has("width")) { params.width = state.optInt("width").coerceAtLeast(1); geometryChanged = true }
+            if (state.has("height")) { params.height = state.optInt("height").coerceAtLeast(1); geometryChanged = true }
+            view.layoutParams = params
+        }
+        if (state.has("alpha")) view.alpha = state.optDouble("alpha").toFloat().coerceIn(0.1f, 1f)
+        if (view is TextView) {
+            if (state.has("text")) view.text = state.optString("text").take(120)
+            if (state.has("textColor")) view.setTextColor(state.optInt("textColor"))
+            if (state.has("textSizePx")) view.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, state.optDouble("textSizePx").toFloat())
+        }
+        if (state.has("backgroundTint")) {
+            view.backgroundTintList = ColorStateList.valueOf(state.optInt("backgroundTint"))
+        } else if (state.has("backgroundColor")) {
+            val color = state.optInt("backgroundColor")
+            if (view.background == null) view.background = ColorDrawable(color)
+            else view.backgroundTintList = ColorStateList.valueOf(color)
+        }
+        if (view is ImageView && state.has("imageTint")) view.imageTintList = ColorStateList.valueOf(state.optInt("imageTint"))
+        if (geometryChanged) {
+            view.requestLayout()
+            applyVisualPriority(view)
+        }
+        view.invalidate()
     }
 
     @Synchronized
@@ -156,47 +252,78 @@ internal object QQInspectorGeometry {
     private fun applyVisualPriority(view: View) {
         if (view.parent == null) return
         val density = view.resources.displayMetrics.density
-        val raisedZ = 64f * density
-        visualOrderSerial = (visualOrderSerial + 1) % 1000
-        val orderingOffset = visualOrderSerial * 0.001f * density
-        val priority = raisedZ + orderingOffset
-
+        val content = runCatching {
+            view.rootView.findViewById<View>(android.R.id.content) as? ViewGroup
+        }.getOrNull()
         val ancestors = ArrayList<ViewGroup>(8)
         var current = view.parent
-        val root = view.rootView
         var depth = 0
-        while (current is ViewGroup && current !== root && depth++ < 32) {
-            val group = current
-            ancestors.add(group)
-            if (!elevatedContainers.containsKey(group)) {
-                elevatedContainers[group] = ContainerLayerState(
-                    translationZ = group.translationZ,
-                    clipChildren = group.clipChildren,
-                    clipToPadding = group.clipToPadding,
-                    clipToOutline = group.clipToOutline
+        while (current is ViewGroup && depth++ < 32) {
+            ancestors.add(current)
+            if (!elevatedContainers.containsKey(current)) {
+                elevatedContainers[current] = ContainerLayerState(
+                    translationZ = current.translationZ,
+                    clipChildren = current.clipChildren,
+                    clipToPadding = current.clipToPadding,
+                    clipToOutline = current.clipToOutline
                 )
             }
-            group.clipChildren = false
-            group.clipToPadding = false
-            if (group.clipToOutline) group.clipToOutline = false
-            if (group.translationZ < priority) group.translationZ = priority
-            current = group.parent
+            current.clipChildren = false
+            current.clipToPadding = false
+            if (current.clipToOutline) current.clipToOutline = false
+            if (current === content) break
+            current = current.parent
         }
         visualOwners[view] = ancestors
-        visualPriorities[view] = priority
 
-        // Elevate both the edited View and each containing branch. Raising only the
-        // child is insufficient when a sibling belongs to a later-drawn parent branch.
+        // Raise the actual control modestly, and only its direct content branch slightly.
+        // InspectorOverlay uses a much higher elevation so it can never disappear under it.
+        val priority = 8f * density
+        raisedViews.putIfAbsent(view, view.translationZ)
+        visualPriorities[view] = priority
         view.translationZ = maxOf(view.translationZ, priority)
+
+        if (content != null) {
+            var branch: View = view
+            var parent = branch.parent
+            var hops = 0
+            while (parent is View && parent !== content && hops++ < 32) {
+                branch = parent
+                parent = branch.parent
+            }
+            if (branch !== view && branch.parent === content) {
+                raisedViews.putIfAbsent(branch, branch.translationZ)
+                branch.translationZ = maxOf(branch.translationZ, 4f * density)
+                raisedViewOwners[view] = listOf(view, branch)
+            } else {
+                raisedViewOwners[view] = listOf(view)
+            }
+        } else {
+            raisedViewOwners[view] = listOf(view)
+        }
         view.invalidate()
     }
 
     @Synchronized
     private fun releaseVisualPriority(view: View) {
-        visualOwners.remove(view)
+        val raised = raisedViewOwners.remove(view).orEmpty()
         visualPriorities.remove(view)
-        val activeEntries = visualOwners.entries.map { it.key to it.value }
-        val stillUsed = activeEntries.flatMap { it.second }.toHashSet()
+        val activeRaised = raisedViewOwners.values.flatten().toHashSet()
+        raised.forEach { target ->
+            if (target !in activeRaised) {
+                val originalZ = raisedViews.remove(target) ?: return@forEach
+                runCatching { target.translationZ = originalZ; target.invalidate() }
+            } else {
+                val maxPriority = raisedViewOwners.entries
+                    .filter { (_, values) -> target in values }
+                    .mapNotNull { (owner, _) -> visualPriorities[owner] }
+                    .maxOrNull() ?: 0f
+                runCatching { target.translationZ = maxOf(raisedViews[target] ?: 0f, maxPriority) }
+            }
+        }
+
+        visualOwners.remove(view)
+        val stillUsed = visualOwners.values.flatten().toHashSet()
         val noLongerUsed = elevatedContainers.keys.filter { it !in stillUsed }
         noLongerUsed.forEach { group ->
             val state = elevatedContainers.remove(group) ?: return@forEach
@@ -208,21 +335,16 @@ internal object QQInspectorGeometry {
                 group.invalidate()
             }
         }
-
-        // If a higher-priority edit was restored while another edit still uses the
-        // same ancestor, recompute the branch Z rather than leaving a stale high value.
-        elevatedContainers.forEach { (group, state) ->
-            val maxPriority = activeEntries
-                .filter { (_, ancestors) -> group in ancestors }
-                .mapNotNull { (owner, _) -> visualPriorities[owner] }
-                .maxOrNull()
-            group.translationZ = maxOf(state.translationZ, maxPriority ?: state.translationZ)
-        }
     }
 
     @Synchronized
     private fun restoreAllVisualPriority() {
         visualOwners.clear()
+        raisedViewOwners.clear()
+        visualPriorities.clear()
+        val raised = raisedViews.entries.map { it.key to it.value }
+        raisedViews.clear()
+        raised.forEach { (view, originalZ) -> runCatching { view.translationZ = originalZ; view.invalidate() } }
         val entries = elevatedContainers.entries.map { it.key to it.value }
         elevatedContainers.clear()
         entries.forEach { (group, state) ->
@@ -313,7 +435,6 @@ internal object QQInspectorGeometry {
         view.translationX += dx.toFloat()
         view.translationY += dy.toFloat()
         view.invalidate()
-        applySameClassFollow(view)
         true
     }.getOrDefault(false)
 
@@ -325,8 +446,6 @@ internal object QQInspectorGeometry {
         val width = if (params.width > 0) params.width else view.width
         val height = if (params.height > 0) params.height else view.height
         resizeTo(view, width + dw, height + dh)
-        applyVisualPriority(view)
-        applySameClassFollow(view)
         true
     }.getOrDefault(false)
 
@@ -337,7 +456,6 @@ internal object QQInspectorGeometry {
         target.text = value
         target.requestLayout()
         target.invalidate()
-        applySameClassFollow(view)
         true
     }.getOrDefault(false)
 
@@ -347,7 +465,6 @@ internal object QQInspectorGeometry {
         remember(view)
         target.setTextColor(color)
         target.invalidate()
-        applySameClassFollow(view)
         true
     }.getOrDefault(false)
 
@@ -360,7 +477,6 @@ internal object QQInspectorGeometry {
             view.background = ColorDrawable(color)
         }
         view.invalidate()
-        applySameClassFollow(view)
         true
     }.getOrDefault(false)
 
@@ -372,7 +488,6 @@ internal object QQInspectorGeometry {
         target.textSize = sizeSp
         target.requestLayout()
         target.invalidate()
-        applySameClassFollow(view)
         true
     }.getOrDefault(false)
 
@@ -382,7 +497,6 @@ internal object QQInspectorGeometry {
         remember(view)
         view.alpha = value
         view.invalidate()
-        applySameClassFollow(view)
         true
     }.getOrDefault(false)
 
