@@ -3066,7 +3066,8 @@ internal object QQInspectorLinks {
     data class WebDocumentResult(
         val links: List<String>,
         val images: List<String>,
-        val cards: List<String>
+        val cards: List<String>,
+        val imageLocations: Map<String, String> = emptyMap()
     )
 
     /**
@@ -3106,6 +3107,7 @@ internal object QQInspectorLinks {
 
         val links = LinkedHashSet<String>()
         val images = LinkedHashSet<String>()
+        val imageLocations = LinkedHashMap<String, String>()
         val cards = LinkedHashSet<String>()
         val remaining = java.util.concurrent.atomic.AtomicInteger(webViews.size)
         val completed = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -3115,7 +3117,7 @@ internal object QQInspectorLinks {
         fun finish() {
             if (!completed.compareAndSet(false, true)) return
             val result = synchronized(links) {
-                WebDocumentResult(links.toList(), images.toList(), cards.toList())
+                WebDocumentResult(links.toList(), images.toList(), cards.toList(), imageLocations.toMap())
             }
             if (activity.isFinishing || activity.isDestroyed) return
             activity.runOnUiThread { onComplete(result) }
@@ -3142,10 +3144,18 @@ internal object QQInspectorLinks {
                 const imageNodes = Array.from(document.querySelectorAll(
                   'img[src],img[data-src],img[data-original],source[src],video[poster]'
                 )).filter(visible).slice(0, 80);
-                const imgs = imageNodes.map(e =>
-                  e.currentSrc || e.src || e.getAttribute('data-src') ||
-                  e.getAttribute('data-original') || e.getAttribute('poster') || ''
-                ).filter(Boolean);
+                const imgs = imageNodes.map(e => {
+                  const r = e.getBoundingClientRect();
+                  return {
+                    url: e.currentSrc || e.src || e.getAttribute('data-src') ||
+                      e.getAttribute('data-original') || e.getAttribute('poster') || '',
+                    x: Math.round(r.left + window.scrollX),
+                    y: Math.round(r.top + window.scrollY),
+                    width: Math.round(r.width),
+                    height: Math.round(r.height),
+                    alt: (e.alt || e.getAttribute('aria-label') || '').slice(0, 80)
+                  };
+                }).filter(e => !!e.url);
                 const dataNodes = Array.from(document.querySelectorAll(
                   'script[type="application/ld+json"],script[type="application/json"],[data-ark],[data-card-json]'
                 )).slice(0, 24);
@@ -3207,12 +3217,23 @@ internal object QQInspectorLinks {
                             }
                             val imageRows = document.optJSONArray("images") ?: JSONArray()
                             for (i in 0 until imageRows.length()) {
-                                val raw = imageRows.optString(i).trim()
+                                val item = imageRows.optJSONObject(i)
+                                val raw = (item?.optString("url") ?: imageRows.optString(i)).trim()
                                 val normalized = normalizeImageUrl(raw) ?: continue
-                                if (synchronized(images) { images.add(normalized) }) {
+                                val location = if (item != null) {
+                                    "WebView 坐标：${item.optInt("x")},${item.optInt("y")} · " +
+                                        "尺寸：${item.optInt("width")}×${item.optInt("height")}" +
+                                        item.optString("alt").takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
+                                } else {
+                                    "WebView 页面中的可见图片元素"
+                                }
+                                if (synchronized(images) {
+                                        imageLocations[normalized] = location
+                                        images.add(normalized)
+                                    }) {
                                     add(
                                         "IMAGE_DOM", normalized, source, full = true,
-                                        parentUrl = pageUrl, location = "WebView 页面中的可见图片元素"
+                                        parentUrl = pageUrl, location = location
                                     )
                                 }
                             }
