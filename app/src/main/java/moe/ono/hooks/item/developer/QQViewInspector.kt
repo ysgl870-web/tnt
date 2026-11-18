@@ -1204,6 +1204,10 @@ private class InspectorOverlay private constructor(
     private var scanRequestId = 0
     private var pickMode = false
     private var multiSelect = false
+    private data class PendingControlAction(val target: View, val action: String)
+    private var pendingControlAction: PendingControlAction? = null
+    private var positionEditTarget: View? = null
+    private var positionStepDp = 1
     private val selectedViews = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<View, Boolean>())
 
     init {
@@ -1240,9 +1244,41 @@ private class InspectorOverlay private constructor(
         }
         boxes.setOnNodeSelected { selected ->
             if (activity.isFinishing || activity.isDestroyed) return@setOnNodeSelected
-            boxes.setSelectedViews(listOf(selected.view))
+            val pending = pendingControlAction
             activity.runOnUiThread {
                 runSafely {
+                    if (!selected.view.isAttachedToWindow || selected.view.parent == null) {
+                        pendingControlAction = null
+                        showInspectorToast("该控件已离开当前页面，请刷新控件列表")
+                        return@runSafely
+                    }
+                    if (pending != null) {
+                        pendingControlAction = null
+                        if (selected.view === pending.target) {
+                            showInspectorToast("请选择另一个控件，不能选择原控件自身")
+                        } else {
+                            val ok = when (pending.action) {
+                                "swap" -> QQInspectorGeometry.swapPositions(pending.target, selected.view)
+                                "replace" -> QQInspectorGeometry.replaceAtPosition(pending.target, selected.view)
+                                else -> false
+                            }
+                            if (ok) {
+                                showInspectorToast(if (pending.action == "swap") "两个控件的位置已交换" else "已用所选控件顶替原控件；原控件已隐藏并保留占位，可随时恢复")
+                                refresh()
+                            } else {
+                                showInspectorToast("操作失败：两个控件必须位于当前同一个 QQ 页面")
+                            }
+                        }
+                        pickMode = false
+                        multiSelect = false
+                        boxes.setPickMode(false)
+                        boxes.setMultiSelect(false)
+                        boxes.setSelectedViews(emptyList())
+                        selectedViews.clear()
+                        buildToolbar()
+                        return@runSafely
+                    }
+                    boxes.setSelectedViews(listOf(selected.view))
                     if (selected.view.isAttachedToWindow || selected.view.parent != null) {
                         showNode(selected)
                     } else {
@@ -1251,7 +1287,35 @@ private class InspectorOverlay private constructor(
                 }
             }
         }
+        boxes.setOnEditFinished {
+            nodes = runCatching { InspectorTree.collect(activity) }.getOrDefault(nodes)
+            boxes.setNodes(nodes)
+            updatePositionEditSummary()
+        }
         buildToolbar()
+    }
+
+    override fun onInterceptTouchEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            val x = event.x
+            val y = event.y
+            val inPanel = toolbarScroll.visibility == View.VISIBLE &&
+                x >= toolbarScroll.left + toolbarScroll.translationX &&
+                x <= toolbarScroll.right + toolbarScroll.translationX &&
+                y >= toolbarScroll.top + toolbarScroll.translationY &&
+                y <= toolbarScroll.bottom + toolbarScroll.translationY
+            val inHandle = panelHandle.visibility == View.VISIBLE &&
+                x >= panelHandle.left + panelHandle.translationX &&
+                x <= panelHandle.right + panelHandle.translationX &&
+                y >= panelHandle.top + panelHandle.translationY &&
+                y <= panelHandle.bottom + panelHandle.translationY
+            val inEditTarget = positionEditTarget?.let { boxes.containsEditPoint(it, event.rawX.toInt(), event.rawY.toInt()) } == true
+            if (!inPanel && !inHandle && !pickMode && !inEditTarget) {
+                close()
+                return true
+            }
+        }
+        return super.onInterceptTouchEvent(event)
     }
 
     private fun setPanelExpanded(expanded: Boolean) {
@@ -1534,6 +1598,70 @@ private class InspectorOverlay private constructor(
         }
     }
 
+    private fun startControlSelection(target: View, action: String) {
+        if (target.parent == null) {
+            showInspectorToast("原控件已离开当前页面，请刷新后重试")
+            return
+        }
+        pendingControlAction = PendingControlAction(target, action)
+        positionEditTarget = null
+        boxes.setEditTarget(null)
+        pickMode = true
+        multiSelect = false
+        boxes.setMultiSelect(false)
+        boxes.setPickMode(true)
+        selectedViews.clear()
+        buildToolbar()
+        showInspectorToast(if (action == "swap") "请在当前页面点选另一个控件，交换两者位置" else "请点选要顶替原控件的控件")
+    }
+
+    private fun startPositionControl(node: InspectorNode) {
+        if (!canModify(node)) {
+            showInspectorToast("此控件暂不支持位置编辑")
+            return
+        }
+        pendingControlAction = null
+        positionEditTarget = node.view
+        pickMode = false
+        multiSelect = false
+        boxes.setMultiSelect(false)
+        boxes.setPickMode(false)
+        boxes.setEditTarget(node.view)
+        boxes.setSelectedViews(listOf(node.view))
+        selectedViews.clear()
+        selectedViews.add(node.view)
+        buildToolbar()
+        updatePositionEditSummary()
+        showInspectorToast("位置控制已开启：拖动控件边框移动，拖动右下角调整大小")
+    }
+
+    private fun finishPositionControl() {
+        positionEditTarget = null
+        boxes.setEditTarget(null)
+        pickMode = false
+        boxes.setPickMode(false)
+        buildToolbar()
+        refresh()
+        showInspectorToast("已退出位置控制，修改会保留；可通过“恢复隐藏 / 移除 / 位置”还原")
+    }
+
+    private fun adjustPosition(dxDp: Int = 0, dyDp: Int = 0, dwDp: Int = 0, dhDp: Int = 0) {
+        val target = positionEditTarget ?: return
+        val unit = dp(activity, positionStepDp)
+        if (dxDp != 0 || dyDp != 0) QQInspectorGeometry.moveBy(target, dxDp * unit, dyDp * unit)
+        if (dwDp != 0 || dhDp != 0) QQInspectorGeometry.resizeBy(target, dwDp * unit, dhDp * unit)
+        boxes.invalidate()
+        updatePositionEditSummary()
+    }
+
+    private fun updatePositionEditSummary() {
+        val target = positionEditTarget ?: return
+        val bounds = QQInspectorGeometry.currentBounds(target) ?: return
+        val summary = "位置：${bounds.left}, ${bounds.top}    尺寸：${bounds.width()} × ${bounds.height()} px"
+        val view = toolbar.findViewWithTag<TextView>("tnt.position.summary")
+        view?.text = summary
+    }
+
     private fun toggleMultiSelect() {
         multiSelect = !multiSelect
         boxes.setMultiSelect(multiSelect)
@@ -1587,8 +1715,14 @@ private class InspectorOverlay private constructor(
     private fun restoreControls() {
         val rules = InspectorControlState.clearPersistentRules()
         val count = InspectorControlState.restoreAll()
+        val geometryCount = QQInspectorGeometry.restoreAll()
+        positionEditTarget = null
+        pendingControlAction = null
+        boxes.setEditTarget(null)
+        pickMode = false
+        boxes.setPickMode(false)
         refresh()
-        showInspectorToast("已恢复隐藏/移除/禁用控件（本次 $count 个，持续规则 $rules 条）")
+        showInspectorToast("已恢复控件与位置（控件 $count 个，位置/大小 $geometryCount 个，持续规则 $rules 条）")
     }
 
     private fun clearPersistentRules() {
@@ -2132,6 +2266,9 @@ private class InspectorOverlay private constructor(
         if (canModify(node)) {
             actions.add("隐藏此控件")
             actions.add("强制移除此控件（可恢复）")
+            actions.add("交换位置")
+            actions.add("顶替此控件")
+            actions.add("位置控制")
             if (node.view.isEnabled) actions.add("禁用此控件")
             if (node.resourceId != "NO_ID") {
                 actions.add("持续隐藏（重进 QQ 仍生效）")
@@ -2247,6 +2384,9 @@ private class InspectorOverlay private constructor(
                             } else showInspectorToast("此控件当前不可移除")
                         } else showInspectorToast("此控件当前不可移除")
                     }
+                    "交换位置" -> startControlSelection(node.view, "swap")
+                    "顶替此控件" -> startControlSelection(node.view, "replace")
+                    "位置控制" -> startPositionControl(node)
                     "禁用此控件" -> {
                         if (canModify(node) && InspectorControlState.disable(node.view)) {
                             showInspectorToast("控件已临时禁用，点“恢复控件”可还原")
@@ -2360,6 +2500,7 @@ private class InspectorOverlay private constructor(
 
     private fun disableFeature() {
         runSafely {
+            QQInspectorRuntime.setPanelOpen(false)
             ConfigManager.getDefaultConfig().edit()
                 .putBoolean(Constants.PrekXXX + "黑壳区/控件探测器", false)
                 .apply()
@@ -2369,6 +2510,7 @@ private class InspectorOverlay private constructor(
     }
 
     private fun close() {
+        QQInspectorRuntime.setPanelOpen(false)
         (parent as? ViewGroup)?.removeView(this)
         QQInspectorRuntime.attach(activity)
     }
@@ -2376,6 +2518,7 @@ private class InspectorOverlay private constructor(
     companion object {
         fun open(activity: Activity) {
             if (activity.isFinishing || activity.isDestroyed) return
+            QQInspectorRuntime.setPanelOpen(true)
             runCatching {
                 val root = activity.findViewById<ViewGroup>(android.R.id.content) ?: return
                 val alreadyOpen = (0 until root.childCount).any { root.getChildAt(it) is InspectorOverlay }
