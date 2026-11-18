@@ -1829,78 +1829,90 @@ private class InspectorOverlay private constructor(
     private fun scanCurrentPageData() {
         if (activity.isFinishing || activity.isDestroyed || parent == null) return
 
-        // Capture the current Activity independently from the View-tree walk. This
-        // includes its live Intent data/extras, currently visible WebViews and visible
-        // text links. It is deliberately not merged with historical/message caches.
         val activityLinks = runCatching {
             QQInspectorLinks.captureActivity(activity)
         }.onFailure {
             Logger.w("TNT page scan Activity capture failed: ${it.javaClass.simpleName}")
         }.getOrDefault(emptyList())
 
-        val treeResult = runCatching {
-            InspectorTree.collect(activity, activityLinks)
-        }
+        val treeResult = runCatching { InspectorTree.collect(activity, activityLinks) }
         val scanned = treeResult.getOrElse { error ->
             Logger.e("TNT page scan View-tree collection failed", error)
             emptyList()
         }
-
         nodes = scanned
         runCatching { boxes.setNodes(nodes) }
             .onFailure { Logger.w("TNT page scan overlay update failed: ${it.javaClass.simpleName}") }
 
-        // Include Activity-level links even if the current screen has no measurable
-        // child Views. De-duplicate against links extracted from visible controls.
-        val links = (activityLinks + scanned.flatMap { it.directLinks + it.links })
+        // DOM extraction is asynchronous (evaluateJavascript callback). It has a bounded
+        // timeout and reports partial results if a host WebView does not support the API.
+        QQInspectorLinks.scanVisibleWebDocuments(activity) { webDocument ->
+            if (activity.isFinishing || activity.isDestroyed || parent == null) return@scanVisibleWebDocuments
+            showPageScanReport(scanned, activityLinks, webDocument, treeResult.exceptionOrNull()?.javaClass?.simpleName)
+        }
+    }
+
+    private fun showPageScanReport(
+        scanned: List<InspectorNode>,
+        activityLinks: List<String>,
+        webDocument: QQInspectorLinks.WebDocumentResult,
+        treeError: String?
+    ) {
+        val links = (activityLinks + scanned.flatMap { it.directLinks + it.links } + webDocument.links)
             .map { it.trim() }.filter { it.isNotEmpty() }.distinct()
-        val images = scanned.flatMap { it.imageLinks }.distinct()
-        val cards = scanned.flatMap { it.cardJsons }.distinct()
+        val images = (scanned.flatMap { it.imageLinks } + webDocument.images).distinct()
+        val cards = (scanned.flatMap { it.cardJsons } + webDocument.cards).distinct()
         val report = buildString {
             append("TNT 当前页面实时扫描结果")
-            append("\n扫描来源：当前 Activity 的 Intent / 可见 WebView / 可见文本 / 可见控件模型")
+            append("\n扫描来源：Activity Intent / 可见控件 / WebView 地址栏 / WebView DOM")
             append("\n控件：").append(scanned.size)
-            append("\nActivity / WebView / 页面文本链接：").append(activityLinks.size)
+            append("\nActivity 与可见控件链接：").append(activityLinks.size)
+            append("\nWebView DOM 链接：").append(webDocument.links.size)
             append("\n当前页面链接（去重）：").append(links.size)
             append("\n当前页面图片直链：").append(images.size)
-            append("\n当前页面 Ark 卡片 JSON：").append(cards.size)
-            if (treeResult.isFailure) {
-                append("\n控件树扫描状态：部分控件读取失败，已保留 Activity 链接结果")
-                append("\n异常：").append(treeResult.exceptionOrNull()?.javaClass?.simpleName ?: "未知")
+            append("\nWebView 图片元素：").append(webDocument.images.size)
+            append("\n当前页面 JSON / Ark 卡片：").append(cards.size)
+            if (treeError != null) {
+                append("\n控件树扫描状态：部分控件读取失败，已保留其他来源的数据")
+                append("\n异常：").append(treeError)
             }
             append("\n\n【当前页面跳转链接】")
             append(if (links.isEmpty()) "\n未从当前页面发现链接" else "\n" + links.joinToString("\n"))
             append("\n\n【当前页面图片直链】")
-            append(if (images.isEmpty()) "\n未从当前可见控件模型中发现图片直链" else "\n" + images.joinToString("\n"))
-            append("\n\n【当前页面 Ark 卡片 JSON】")
-            if (cards.isEmpty()) append("\n未从当前可见控件模型中发现 JSON")
+            append(if (images.isEmpty()) "\n未发现可用图片直链" else "\n" + images.joinToString("\n"))
+            append("\n\n【当前页面 JSON / Ark 卡片】")
+            if (cards.isEmpty()) append("\n未发现符合结构特征的 JSON / 卡片数据")
             else cards.forEachIndexed { index, json ->
-                append("\n\n--- 当前页面卡片 ").append(index + 1).append(" ---\n").append(json)
+                append("\n\n--- 当前页面数据 ").append(index + 1).append(" ---\n").append(json)
             }
-            append("\n\n说明：只展示本次扫描时当前 Activity 的数据，不读取历史链接记录或其他页面的缓存。")
+            append("\n\n说明：数据来自本次扫描时当前 Activity、可见控件与当前 WebView DOM；不包含历史消息缓存、其他页面数据、Cookie 或网络请求正文。")
         }
 
         runCatching {
+            val body = TextView(activity).apply {
+                text = report
+                textSize = 12.5f
+                setTextColor(0xFF172B43.toInt())
+                setTextIsSelectable(true)
+                setHorizontallyScrolling(false)
+                breakStrategy = android.text.Layout.BREAK_STRATEGY_HIGH_QUALITY
+                setLineSpacing(dp(activity, 2).toFloat(), 1f)
+                setPadding(dp(activity, 16), dp(activity, 14), dp(activity, 16), dp(activity, 18))
+            }
             val scroll = android.widget.ScrollView(activity).apply {
                 isFillViewport = false
-                addView(TextView(activity).apply {
-                    text = report
-                    textSize = 13f
-                    setTextColor(0xFF172B43.toInt())
-                    setTextIsSelectable(true)
-                    setPadding(dp(activity, 16), dp(activity, 14), dp(activity, 16), dp(activity, 18))
-                }, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+                addView(body, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             }
             AlertDialog.Builder(activity)
                 .setTitle("实时页面扫描 · ${scanned.size} 个控件 · ${links.size} 条链接")
                 .setView(scroll)
                 .setPositiveButton("复制扫描结果") { _, _ -> copyText(activity, "TNT 实时页面扫描结果", report) }
-                .setNeutralButton("复制当前页卡片 JSON") { _, _ ->
-                    if (cards.isEmpty()) showInspectorToast("当前页面没有识别到 Ark 卡片 JSON")
-                    else copyText(activity, "当前页面 Ark 卡片 JSON", cards.joinToString("\n\n"))
+                .setNeutralButton("复制当前页 JSON") { _, _ ->
+                    if (cards.isEmpty()) showInspectorToast("当前页面没有识别到 JSON / Ark 数据")
+                    else copyText(activity, "当前页面 JSON / Ark 卡片", cards.joinToString("\n\n"))
                 }
                 .setNegativeButton("关闭", null)
-                .show()
+                .showInspectorStyled(activity, .88f)
         }.onFailure {
             Logger.e("TNT page scan result dialog failed", it)
             showInspectorToast("扫描完成，但结果窗口显示失败：${it.javaClass.simpleName}")
