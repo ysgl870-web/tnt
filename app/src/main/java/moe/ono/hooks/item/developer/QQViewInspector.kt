@@ -327,6 +327,7 @@ private object QQInspectorRuntime {
                             if (isEnabled()) {
                                 QQInspectorLinks.captureActivity(activity)
                                 InspectorControlState.applyPersistent(activity)
+                                QQInspectorPersistentControls.apply(activity)
                                 attach(activity)
                             } else {
                                 setPanelOpen(false)
@@ -1239,6 +1240,9 @@ private class InspectorOverlay private constructor(
     private val selectedViews = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<View, Boolean>())
 
     init {
+        // Keep the floating inspector above every edited QQ control.
+        elevation = dp(activity, 128).toFloat()
+        translationZ = dp(activity, 128).toFloat()
         // Transparent overlay: never tint the entire QQ page.
         setBackgroundColor(0x00000000)
         isClickable = false
@@ -1294,11 +1298,14 @@ private class InspectorOverlay private constructor(
                         if (ok) {
                             showInspectorToast(if (pending.action == "swap") "两个控件的位置已交换" else "顶替完成：原控件已退出布局，所选控件已占据原位置；可随时恢复")
                             if (pending.action == "replace") {
+                                QQInspectorPersistentControls.save(activity, selected.view)
                                 // Wait for the host's GONE/reflow pass and replacement alignment.
                                 boxes.postDelayed({
                                     if (!activity.isFinishing && !activity.isDestroyed && parent != null) refresh()
                                 }, 120L)
                             } else {
+                                QQInspectorPersistentControls.save(activity, pending.target)
+                                QQInspectorPersistentControls.save(activity, selected.view)
                                 refresh()
                             }
                         } else {
@@ -1324,8 +1331,8 @@ private class InspectorOverlay private constructor(
             }
         }
         boxes.setOnEditFinished {
+            positionEditTarget?.let { QQInspectorGeometry.finishEditing(it) }
             nodes = runCatching { InspectorTree.collect(activity) }.getOrDefault(nodes)
-            positionEditTarget?.let { QQInspectorGeometry.applySameClassFollow(it) }
             boxes.setNodes(nodes)
             updatePositionEditSummary()
         }
@@ -1742,13 +1749,19 @@ private class InspectorOverlay private constructor(
     }
 
     private fun finishPositionControl() {
+        val target = positionEditTarget
+        target?.let { QQInspectorGeometry.finishEditing(it) }
+        val persisted = target?.let { QQInspectorPersistentControls.save(activity, it) } == true
         positionEditTarget = null
         boxes.setEditTarget(null)
         pickMode = false
         boxes.setPickMode(false)
         buildToolbar()
         refresh()
-        showInspectorToast("已退出位置控制，修改会保留；可通过“恢复隐藏 / 移除 / 位置”还原")
+        showInspectorToast(
+            if (persisted) "已退出位置控制，修改已保存；后续页面重建会尝试恢复"
+            else "已退出位置控制；当前页面修改保留，无唯一资源 ID 时重建页面后可能需要重新设置"
+        )
     }
 
     private fun adjustPosition(dxDp: Int = 0, dyDp: Int = 0, dwDp: Int = 0, dhDp: Int = 0) {
@@ -1756,6 +1769,7 @@ private class InspectorOverlay private constructor(
         val unit = dp(activity, positionStepDp)
         if (dxDp != 0 || dyDp != 0) QQInspectorGeometry.moveBy(target, dxDp * unit, dyDp * unit)
         if (dwDp != 0 || dhDp != 0) QQInspectorGeometry.resizeBy(target, dwDp * unit, dhDp * unit)
+        QQInspectorGeometry.finishEditing(target)
         boxes.invalidate()
         updatePositionEditSummary()
     }
@@ -1840,6 +1854,7 @@ private class InspectorOverlay private constructor(
         // clearPersistentRules() also restores the in-memory hide/remove/disable snapshots.
         val rules = InspectorControlState.clearPersistentRules()
         val geometryCount = QQInspectorGeometry.restoreAll()
+        val visualRules = QQInspectorPersistentControls.clear()
         positionEditTarget = null
         pendingControlAction = null
         boxes.setEditTarget(null)
@@ -1847,7 +1862,7 @@ private class InspectorOverlay private constructor(
         pickMode = false
         boxes.setPickMode(false)
         refresh()
-        showInspectorToast("已恢复所有已登记控件状态与位置/大小；清除持续规则 $rules 条，几何还原 $geometryCount 项")
+        showInspectorToast("已恢复所有已登记控件状态与位置/大小；清除持续规则 $rules 条、视觉规则 $visualRules 条，几何还原 $geometryCount 项")
     }
 
     private fun clearPersistentRules() {
@@ -2596,8 +2611,15 @@ private class InspectorOverlay private constructor(
                     "顶替此控件" -> startControlSelection(node.view, "replace")
                     "位置控制" -> startPositionControl(node)
                     "控件改变" -> QQInspectorStyleEditor.show(activity, node.view) { changed ->
+                        val persisted = QQInspectorPersistentControls.save(activity, node.view)
                         refresh()
-                        showInspectorToast(if (changed > 0) "已应用 $changed 项控件样式修改" else "未应用样式修改")
+                        showInspectorToast(
+                            when {
+                                changed <= 0 -> "未应用样式修改"
+                                persisted -> "已应用 $changed 项修改，并已保存到本地"
+                                else -> "已应用 $changed 项修改；此控件没有唯一稳定资源 ID，重建页面后可能需要重新设置"
+                            }
+                        )
                     }
                     "同类跟随" -> {
                         val count = QQInspectorGeometry.enableSameClassFollow(node.view)
@@ -2733,6 +2755,10 @@ private class InspectorOverlay private constructor(
 
     private fun close() {
         QQInspectorRuntime.setPanelOpen(false)
+        positionEditTarget?.let {
+            QQInspectorGeometry.finishEditing(it)
+            QQInspectorPersistentControls.save(activity, it)
+        }
         pendingControlAction = null
         positionEditTarget = null
         boxes.setPickAnyControl(false)
