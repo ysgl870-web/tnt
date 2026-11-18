@@ -1290,7 +1290,7 @@ private class InspectorOverlay private constructor(
                             else -> false
                         }
                         if (ok) {
-                            showInspectorToast(if (pending.action == "swap") "两个控件的位置已交换" else "已用所选控件顶替原控件；原控件已隐藏并保留布局占位，可随时恢复")
+                            showInspectorToast(if (pending.action == "swap") "两个控件的位置已交换" else "顶替完成：原控件已退出布局，所选控件已占据原位置；可随时恢复")
                             refresh()
                         } else {
                             showInspectorToast("操作失败：两个控件必须位于当前同一个 QQ 页面，且不能互为父子控件")
