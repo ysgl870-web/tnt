@@ -43,6 +43,8 @@ internal object QQInspectorBridgeDialog {
         root.addView(TextView(context).apply {
             text = "支持 http/https、intent://、mqqapi://、QQ Scheme、URL 编码与 Base64 嵌套参数"
             textSize = 12f
+            setTextColor(0xFFB9D0E3.toInt())
+            setLineSpacing(dp(2).toFloat(), 1f)
         })
         val input = EditText(context).apply {
             setText(initial)
@@ -62,39 +64,64 @@ internal object QQInspectorBridgeDialog {
             text = "转换结果将在这里显示"
             textSize = 12f
             setTextIsSelectable(true)
+            setHorizontallyScrolling(false)
+            breakStrategy = android.text.Layout.BREAK_STRATEGY_HIGH_QUALITY
             setPadding(dp(12), dp(12), dp(12), dp(12))
-            setBackgroundColor(0x142A78B8)
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = dp(14).toFloat()
+                setColor(0xFF1B344D.toInt())
+                setStroke(dp(1), 0x553C9EC5)
+            }
         }
         val detail = TextView(context).apply {
             text = "解析详情"
             textSize = 12f
             setTextIsSelectable(true)
+            setHorizontallyScrolling(false)
+            breakStrategy = android.text.Layout.BREAK_STRATEGY_HIGH_QUALITY
+            setLineSpacing(dp(2).toFloat(), 1f)
+            setTextColor(0xFFD2E6F5.toInt())
             setPadding(dp(4), dp(10), dp(4), dp(4))
-        }
-        val scroll = ScrollView(context).apply {
-            isFillViewport = true
-            addView(detail)
         }
         root.addView(TextView(context).apply {
             text = "转换输出"
             textSize = 13f
+            setTextColor(0xFF78D9F7.toInt())
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
             setPadding(0, dp(12), 0, dp(6))
         })
         root.addView(output)
-        root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(150)))
+        root.addView(TextView(context).apply {
+            text = "解析详情"
+            textSize = 13f
+            setTextColor(0xFF78D9F7.toInt())
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setPadding(0, dp(12), 0, dp(6))
+        })
+        root.addView(detail)
+        val contentScroll = ScrollView(context).apply {
+            isFillViewport = false
+            overScrollMode = android.view.View.OVER_SCROLL_NEVER
+            addView(root, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
         var last: Result? = null
         val dialog = AlertDialog.Builder(context)
             .setTitle("黑壳区 · 跳板转换")
-            .setView(root)
+            .setView(contentScroll)
             .setNegativeButton("关闭", null)
             .create()
 
         fun actionButton(label: String, action: () -> Unit): TextView = TextView(context).apply {
             text = label
-            textSize = 13f
+            textSize = 11.5f
             gravity = android.view.Gravity.CENTER
+            maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            includeFontPadding = false
+            setHorizontallyScrolling(false)
+            minHeight = dp(48)
             setTextColor(0xFFFFFFFF.toInt())
-            setPadding(dp(8), dp(11), dp(8), dp(11))
+            setPadding(dp(6), dp(8), dp(6), dp(8))
             background = android.graphics.drawable.GradientDrawable(
                 android.graphics.drawable.GradientDrawable.Orientation.LEFT_RIGHT,
                 intArrayOf(0xFF087DBB.toInt(), 0xFF1456A0.toInt())
@@ -120,7 +147,7 @@ internal object QQInspectorBridgeDialog {
                 Toast.makeText(context, "转换结果已复制", Toast.LENGTH_SHORT).show()
             }
         }
-        val openButton = actionButton("确认跳转") {
+        val openButton = actionButton("QQ 内置浏览器打开") {
             val result = last ?: convert(input.text?.toString().orEmpty()).also {
                 last = it
                 output.text = it.converted
@@ -129,7 +156,7 @@ internal object QQInspectorBridgeDialog {
             if (result.openTarget.isBlank()) Toast.makeText(context, "没有可打开的目标链接", Toast.LENGTH_SHORT).show()
             else AlertDialog.Builder(context)
                 .setTitle("确认通过跳板打开？")
-                .setMessage("将打开解析出的目标链接，请确认来源可信：\n\n${result.openTarget}")
+                .setMessage("网页链接优先交给 QQ 内置浏览器；QQ Scheme 保留原协议交给 QQ/TIM 处理。请确认目标来源可信：\n\n${result.openTarget}")
                 .setPositiveButton("打开") { _, _ -> openTarget(context, result.openTarget) }
                 .setNegativeButton("取消", null)
                 .show()
@@ -141,7 +168,18 @@ internal object QQInspectorBridgeDialog {
         }
         root.addView(actions)
         dialog.show()
-        dialog.window?.setLayout((context.resources.displayMetrics.widthPixels * 0.92f).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
+        dialog.window?.let { window ->
+            val metrics = context.resources.displayMetrics
+            val width = (metrics.widthPixels * .94f).toInt().coerceAtMost(dp(520))
+            val height = (metrics.heightPixels * .86f).toInt().coerceAtMost(dp(720))
+            window.setBackgroundDrawable(android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = dp(22).toFloat()
+                setColor(0xFF14263B.toInt())
+                setStroke(dp(1), 0x9957D6F5.toInt())
+            })
+            window.setLayout(width, height)
+            window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        }
         if (initial.isNotBlank()) {
             val result = convert(initial)
             last = result
@@ -246,16 +284,7 @@ internal object QQInspectorBridgeDialog {
     }
 
     private fun openTarget(context: Context, target: String) {
-        try {
-            val intent = if (target.startsWith("intent:", true)) Intent.parseUri(target, Intent.URI_INTENT_SCHEME)
-            else Intent(Intent.ACTION_VIEW, Uri.parse(target)).addCategory(Intent.CATEGORY_BROWSABLE)
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(intent)
-            Toast.makeText(context, "已提交给系统处理", Toast.LENGTH_SHORT).show()
-        } catch (error: ActivityNotFoundException) {
-            Toast.makeText(context, "没有应用能处理该链接", Toast.LENGTH_LONG).show()
-        } catch (error: Throwable) {
-            Toast.makeText(context, "跳转失败：${error.javaClass.simpleName}", Toast.LENGTH_LONG).show()
-        }
+        val result = QQInspectorNavigation.open(context, target, preferQQBrowser = true)
+        Toast.makeText(context, result.message, if (result.opened) Toast.LENGTH_SHORT else Toast.LENGTH_LONG).show()
     }
 }
