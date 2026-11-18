@@ -1784,16 +1784,17 @@ private class InspectorOverlay private constructor(
     }
 
     private fun restoreControls() {
+        // clearPersistentRules() also restores the in-memory hide/remove/disable snapshots.
         val rules = InspectorControlState.clearPersistentRules()
-        val count = InspectorControlState.restoreAll()
         val geometryCount = QQInspectorGeometry.restoreAll()
         positionEditTarget = null
         pendingControlAction = null
         boxes.setEditTarget(null)
+        boxes.setPickAnyControl(false)
         pickMode = false
         boxes.setPickMode(false)
         refresh()
-        showInspectorToast("已恢复控件与位置（控件 $count 个，位置/大小 $geometryCount 个，持续规则 $rules 条）")
+        showInspectorToast("已恢复所有已登记控件状态与位置/大小；清除持续规则 $rules 条，几何还原 $geometryCount 项")
     }
 
     private fun clearPersistentRules() {
@@ -3145,7 +3146,7 @@ internal object QQInspectorLinks {
             activity.runOnUiThread { onComplete(result) }
         }
 
-        handler.postDelayed({ finish() }, 1600L)
+        handler.postDelayed({ finish() }, 2400L)
 
         val script = """
             (function() {
@@ -3485,9 +3486,14 @@ internal object QQInspectorLinks {
             for (item in prepared) {
                 val entry = item[0] as LinkEntry
                 val value = item[1] as String
-                val fingerprint = entry.kind + "|" + value
+                val normalizedKind = when {
+                    isImageKind(entry.kind) -> "IMAGE"
+                    isCardJsonKind(entry.kind) -> "CARD_JSON"
+                    else -> entry.kind
+                }
+                val fingerprint = normalizedKind + "|" + value + "|" + entry.location.orEmpty()
                 val previous = recent[fingerprint]
-                if (previous != null && now - previous < 900L) continue
+                if (previous != null && now - previous < 1_500L) continue
                 recent[fingerprint] = now
                 fresh.add(item)
             }
