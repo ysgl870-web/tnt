@@ -140,7 +140,7 @@ private object QQInspectorAppearanceDialog {
             .setPositiveButton("保存") { _, _ ->
                 cfg.edit().putInt(ALPHA_KEY, seek.progress + 35).putInt(COLOR_KEY, color).apply()
                 Toast.makeText(context, "设置已保存，重新打开悬浮面板后生效", Toast.LENGTH_SHORT).show()
-            }.setNegativeButton("取消", null).show()
+            }.setNegativeButton("取消", null).showInspectorStyled(context)
     }
 }
 
@@ -182,11 +182,11 @@ private object QQInspectorLinkHistoryDialog {
                             QQInspectorLinks.clear()
                             Toast.makeText(context, "本地链接记录已清空", Toast.LENGTH_SHORT).show()
                         }
-                        .setNegativeButton("取消", null).show()
+                        .setNegativeButton("取消", null).showInspectorStyled(context)
                 }
             }
             .setNegativeButton("关闭", null)
-            .show()
+            .showInspectorStyled(context)
     }
 
     private fun categoryOf(kind: String): String = when {
@@ -215,7 +215,7 @@ private object QQInspectorLinkHistoryDialog {
                 copyText(context, category, JSONArray().apply { rows.forEach { put(JSONObject(it.toString())) } }.toString(2))
             }
             .setNegativeButton("返回") { _, _ -> show(context) }
-            .show()
+            .showInspectorStyled(context)
     }
 
     private fun showEvents(context: Context, category: String, url: String, events: List<JSONObject>) {
@@ -223,15 +223,15 @@ private object QQInspectorLinkHistoryDialog {
         val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
         val labels = sorted.map { row ->
             val parent = row.optString("parentUrl")
-            "${formatter.format(Date(row.optLong("time")))}\n来源：${row.optString("source")}" +
-                if (parent.isNotBlank()) "\n上级：${QQInspectorLinks.mask(parent).take(110)}" else ""
+            "${formatter.format(Date(row.optLong("time")))}\n来源：${row.optString("source").take(64)}" +
+                if (parent.isNotBlank()) "\n上级：${QQInspectorLinks.mask(parent).take(74)}" else ""
         }.toTypedArray()
         AlertDialog.Builder(context)
             .setTitle("$category · ${sorted.size} 次捕获")
             .setItems(labels) { _, which -> sorted.getOrNull(which)?.let { showEventDetail(context, category, url, it) } }
             .setPositiveButton("复制链接") { _, _ -> copyText(context, category, url) }
             .setNegativeButton("返回") { _, _ -> showGroups(context, QQInspectorLinks.readAll().filter { categoryOf(it.optString("kind")) == category }, category) }
-            .show()
+            .showInspectorStyled(context)
     }
 
     private fun showEventDetail(context: Context, category: String, url: String, row: JSONObject) {
@@ -244,7 +244,7 @@ private object QQInspectorLinkHistoryDialog {
             .setPositiveButton("复制完整内容") { _, _ -> copyText(context, category, url) }
             .setNegativeButton("跳转") { _, _ -> launch(context, url, !QQInspectorLinks.isImageKind(row.optString("kind"))) }
         if (parent.isNotBlank()) builder.setNeutralButton("查看上级链接") { _, _ -> showParent(context, parent) }
-        builder.show()
+        builder.showInspectorStyled(context)
     }
 
     private fun showParent(context: Context, parent: String) {
@@ -252,22 +252,44 @@ private object QQInspectorLinkHistoryDialog {
             .setMessage(QQInspectorLinks.mask(parent) + "\n\n这是捕获该跳转时所在的来源页面。")
             .setPositiveButton("复制") { _, _ -> copyText(context, "上级页面链接", parent) }
             .setNeutralButton("优先在 QQ 中打开") { _, _ -> launch(context, parent, true) }
-            .setNegativeButton("关闭", null).show()
+            .setNegativeButton("关闭", null).showInspectorStyled(context)
     }
 
     private fun launch(context: Context, url: String, preferQQ: Boolean) {
-        val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return
-        if (preferQQ) {
-            for (pkg in listOf("com.tencent.mobileqq", "com.tencent.tim")) {
-                try {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, uri).setPackage(pkg).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                    return
-                } catch (_: Throwable) { }
+        val result = QQInspectorNavigation.open(context, url, preferQQBrowser = preferQQ)
+        Toast.makeText(
+            context,
+            result.message,
+            if (result.opened) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
+        ).show()
+    }
+}
+
+private fun AlertDialog.Builder.showInspectorStyled(
+    context: Context,
+    maxHeightFraction: Float = .84f
+): AlertDialog {
+    val dialog = create()
+    dialog.show()
+    dialog.window?.let { window ->
+        val metrics = context.resources.displayMetrics
+        val width = (metrics.widthPixels * .94f).toInt().coerceAtMost(dp(context, 500))
+        val maxHeight = (metrics.heightPixels * maxHeightFraction).toInt()
+            .coerceAtLeast(dp(context, 260))
+        window.setBackgroundDrawable(GradientDrawable().apply {
+            cornerRadius = dp(context, 20).toFloat()
+            setColor(0xFFF7FAFD.toInt())
+            setStroke(dp(context, 1), 0x9957BFE5.toInt())
+        })
+        window.setLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT)
+        window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        window.decorView.post {
+            if (window.decorView.height > maxHeight) {
+                window.setLayout(width, maxHeight)
             }
         }
-        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-            .onFailure { Toast.makeText(context, "无法打开链接：${it.javaClass.simpleName}", Toast.LENGTH_SHORT).show() }
     }
+    return dialog
 }
 
 private fun copyText(context: Context, label: String, value: String) {
@@ -1736,7 +1758,7 @@ private class InspectorOverlay private constructor(
                         AlertDialog.Builder(activity).setTitle("清空链接记录？")
                             .setMessage("此操作只清除 TNT 本地保存的记录，不影响 QQ 聊天内容。")
                             .setPositiveButton("清空") { _, _ -> QQInspectorLinks.clear(); showInspectorToast("链接记录已清空") }
-                            .setNegativeButton("取消", null).show()
+                            .setNegativeButton("取消", null).showInspectorStyled(context)
                     }
                 }
             }
