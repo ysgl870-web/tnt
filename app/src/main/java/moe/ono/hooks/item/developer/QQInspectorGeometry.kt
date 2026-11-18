@@ -120,26 +120,30 @@ internal object QQInspectorGeometry {
     }.getOrNull()
 
     @Synchronized
-    fun restoreAll(): Int {
-        val entries = originals.entries.map { it.key to it.value }
-        originals.clear()
-        entries.forEach { (view, saved) ->
-            runCatching {
-                val params = saved.layoutParams
-                if (params != null) {
-                    params.width = saved.width
-                    params.height = saved.height
-                    view.layoutParams = params
-                }
-                view.translationX = saved.translationX
-                view.translationY = saved.translationY
-                view.scaleX = saved.scaleX
-                view.scaleY = saved.scaleY
-                view.visibility = saved.visibility
-                view.requestLayout()
-                view.invalidate()
+    fun restore(view: View): Boolean {
+        val saved = originals.remove(view) ?: return false
+        return runCatching {
+            val params = saved.layoutParams
+            if (params != null) {
+                params.width = saved.width
+                params.height = saved.height
+                view.layoutParams = params
             }
-        }
+            view.translationX = saved.translationX
+            view.translationY = saved.translationY
+            view.scaleX = saved.scaleX
+            view.scaleY = saved.scaleY
+            view.visibility = saved.visibility
+            view.requestLayout()
+            view.invalidate()
+            true
+        }.getOrDefault(false)
+    }
+
+    @Synchronized
+    fun restoreAll(): Int {
+        val entries = originals.keys.toList()
+        entries.forEach(::restore)
         return entries.size
     }
 }
