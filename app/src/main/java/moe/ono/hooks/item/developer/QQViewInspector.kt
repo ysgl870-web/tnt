@@ -1891,6 +1891,10 @@ private class InspectorOverlay private constructor(
             .map { it.trim() }.filter { it.isNotEmpty() }.distinct()
         val images = (scanned.flatMap { it.imageLinks } + webDocument.images).distinct()
         val cards = (scanned.flatMap { it.cardJsons } + webDocument.cards).distinct()
+        val storedImageLocations = QQInspectorLinks.readAll()
+            .filter { QQInspectorLinks.isImageKind(it.optString("kind")) && it.optString("url") in images }
+            .groupBy { it.optString("url") }
+            .mapValues { (_, rows) -> rows.maxByOrNull { it.optLong("time") }?.optString("location").orEmpty() }
         val report = buildString {
             append("TNT 当前页面实时扫描结果")
             append("\n扫描来源：Activity Intent / 可见控件 / WebView 地址栏 / WebView DOM")
@@ -1907,8 +1911,17 @@ private class InspectorOverlay private constructor(
             }
             append("\n\n【当前页面跳转链接】")
             append(if (links.isEmpty()) "\n未从当前页面发现链接" else "\n" + links.joinToString("\n"))
-            append("\n\n【当前页面图片直链】")
-            append(if (images.isEmpty()) "\n未发现可用图片直链" else "\n" + images.joinToString("\n"))
+            append("\n\n【当前页面图片直链 / 所在位置】")
+            if (images.isEmpty()) {
+                append("\n未发现可用图片直链")
+            } else {
+                images.forEachIndexed { index, image ->
+                    append("\n").append(index + 1).append(". ").append(image)
+                    val location = webDocument.imageLocations[image]
+                        ?: storedImageLocations[image].orEmpty()
+                    if (location.isNotBlank()) append("\n   出现位置：").append(location)
+                }
+            }
             append("\n\n【当前页面 JSON / Ark 卡片】")
             if (cards.isEmpty()) append("\n未发现符合结构特征的 JSON / 卡片数据")
             else cards.forEachIndexed { index, json ->
