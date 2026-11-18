@@ -49,7 +49,7 @@ internal object QQInspectorNavigation {
 
         val hostPackages = LinkedHashSet<String>().apply {
             val current = (context as? Activity)?.packageName
-            if (current in qqPackages) add(current!!)
+            if (current != null && current in qqPackages) add(current)
             addAll(qqPackages)
         }
 
