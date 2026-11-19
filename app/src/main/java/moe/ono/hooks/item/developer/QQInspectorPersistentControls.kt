@@ -39,9 +39,14 @@ internal object QQInspectorPersistentControls {
         val childIndex: Int
     ) {
         // Child index is a tie-breaker only, never the primary identity of a named View.
-        fun key(): String = listOf(
-            activity, viewClass, resource, parentClass, parentResource, grandParentClass
-        ).joinToString("|")
+        fun key(): String {
+            val fields = mutableListOf(
+                activity, viewClass, resource, parentClass, parentResource, grandParentClass
+            )
+            // Anonymous views have no resource ID; their child index is part of the fallback identity.
+            if (resource == "NO_ID") fields.add(childIndex.toString())
+            return fields.joinToString("|")
+        }
 
         fun toJson(state: JSONObject, follow: Boolean) = JSONObject()
             .put("activity", activity)
@@ -89,14 +94,19 @@ internal object QQInspectorPersistentControls {
         JSONArray(ConfigManager.getDefaultConfig().getStringOrDefault(STORAGE_KEY, "[]"))
     }.getOrDefault(JSONArray())
 
-    private fun signatureKey(item: JSONObject): String = listOf(
-        item.optString("activity"),
-        item.optString("class"),
-        item.optString("resource"),
-        item.optString("parentClass"),
-        item.optString("parentResource"),
-        item.optString("grandParentClass")
-    ).joinToString("|")
+    private fun signatureKey(item: JSONObject): String {
+        val resource = item.optString("resource")
+        val fields = mutableListOf(
+            item.optString("activity"),
+            item.optString("class"),
+            resource,
+            item.optString("parentClass"),
+            item.optString("parentResource"),
+            item.optString("grandParentClass")
+        )
+        if (resource == "NO_ID") fields.add(item.optInt("childIndex", -1).toString())
+        return fields.joinToString("|")
+    }
 
     private fun isFollowRule(item: JSONObject): Boolean =
         item.optBoolean("follow", false)
@@ -105,10 +115,8 @@ internal object QQInspectorPersistentControls {
     fun save(activity: Activity, view: View): Boolean = runCatching {
         val follow = QQInspectorGeometry.hasSameClassFollow(view)
         val signature = signature(activity, view) ?: return false
-        // A one-off edit needs a resource ID. Follow can use an anonymous View only
-        // with its parent structure and index as a conservative fallback.
-        if (signature.resource == "NO_ID" && !follow) return false
-
+        // Anonymous Views are allowed too; their parent structure and child index form
+        // a conservative fallback identity, and the target must resolve uniquely on restore.
         val state = QQInspectorGeometry.exportPersistentState(view) ?: JSONObject()
         val shouldStore = state.length() > 0 || follow
         val old = readRules()
@@ -129,7 +137,8 @@ internal object QQInspectorPersistentControls {
             ensureWatcher(activity, root)
             root.post { applyRulesToRoot(activity, root) }
         }
-        true
+        val uniquelyResolvable = follow || (root != null && isUniqueTarget(root, signature))
+        shouldStore && uniquelyResolvable
     }.getOrElse {
         Logger.w("TNT visual rule save failed: " + it.javaClass.simpleName)
         false
@@ -211,6 +220,47 @@ internal object QQInspectorPersistentControls {
             root.viewTreeObserver.takeIf { it.isAlive }?.removeOnGlobalLayoutListener(watcher.layoutListener)
             root.removeOnAttachStateChangeListener(watcher.attachListener)
         }
+    }
+
+    private fun isUniqueTarget(root: ViewGroup, target: Signature): Boolean {
+        val candidates = ArrayList<Candidate>(2)
+        var visited = 0
+        fun walk(view: View, depth: Int) {
+            if (visited >= MAX_NODES_PER_SCAN || depth > MAX_DEPTH || candidates.size > 1) return
+            visited++
+            if (view !== root && (view.id != View.NO_ID || target.resource == "NO_ID") &&
+                view.javaClass.simpleName != "InspectorOverlay" &&
+                view.tag != "tnt.qq.inspector.entry"
+            ) {
+                val current = signatureFromView(target.activity, view)
+                if (current != null && current.key() == target.key()) {
+                    candidates.add(Candidate(view, current.childIndex))
+                }
+            }
+            if (view is ViewGroup) {
+                for (index in 0 until view.childCount) walk(view.getChildAt(index), depth + 1)
+            }
+        }
+        walk(root, 0)
+        if (candidates.size == 1) return true
+        val exact = candidates.count { it.childIndex == target.childIndex }
+        return exact == 1
+    }
+
+    private fun signatureFromView(activityClassName: String, view: View): Signature? {
+        val parent = view.parent as? ViewGroup ?: return null
+        val grandParent = parent.parent as? View
+        val index = parent.indexOfChild(view)
+        if (index < 0) return null
+        return Signature(
+            activity = activityClassName,
+            viewClass = view.javaClass.name,
+            resource = resourceName(view),
+            parentClass = parent.javaClass.name,
+            parentResource = resourceName(parent),
+            grandParentClass = grandParent?.javaClass?.name.orEmpty(),
+            childIndex = index
+        )
     }
 
     private fun applyRulesToRoot(activity: Activity, root: ViewGroup) {

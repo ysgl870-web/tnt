@@ -1763,7 +1763,7 @@ private class InspectorOverlay private constructor(
         refresh()
         showInspectorToast(
             if (persisted) "已退出位置控制，修改已保存；后续页面重建会尝试恢复"
-            else "已退出位置控制；当前页面修改保留，无唯一资源 ID 时重建页面后可能需要重新设置"
+            else "已退出位置控制；当前修改已保留，但控件结构无法唯一定位，页面重建后可能需要重新设置"
         )
     }
 
@@ -2625,7 +2625,7 @@ private class InspectorOverlay private constructor(
                             when {
                                 changed <= 0 -> "未应用样式修改"
                                 persisted -> "已应用 $changed 项修改，并已保存到本地"
-                                else -> "已应用 $changed 项修改；此控件没有唯一稳定资源 ID，重建页面后可能需要重新设置"
+                                else -> "已应用 $changed 项修改；控件结构暂时无法唯一定位，页面重建后不保证自动恢复，可开启同类跟随同步同组控件"
                             }
                         )
                     }
