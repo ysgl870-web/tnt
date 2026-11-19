@@ -177,42 +177,105 @@ internal object QQInspectorGeometry {
     fun applyPersistentState(view: View, state: JSONObject) {
         if (view.parent == null || state.length() == 0) return
         remember(view)
+        val original = originals[view] ?: return
         var geometryChanged = false
+        var anyChanged = false
+
         if (state.has("dx")) {
-            view.translationX = originals[view]!!.translationX + state.optDouble("dx").toFloat()
-            geometryChanged = true
+            val value = original.translationX + state.optDouble("dx").toFloat()
+            if (abs(view.translationX - value) > 0.05f) {
+                view.translationX = value
+                geometryChanged = true
+                anyChanged = true
+            }
         }
         if (state.has("dy")) {
-            view.translationY = originals[view]!!.translationY + state.optDouble("dy").toFloat()
-            geometryChanged = true
+            val value = original.translationY + state.optDouble("dy").toFloat()
+            if (abs(view.translationY - value) > 0.05f) {
+                view.translationY = value
+                geometryChanged = true
+                anyChanged = true
+            }
         }
+
         val params = view.layoutParams
         if (params != null) {
-            if (state.has("width")) { params.width = state.optInt("width").coerceAtLeast(1); geometryChanged = true }
-            if (state.has("height")) { params.height = state.optInt("height").coerceAtLeast(1); geometryChanged = true }
-            view.layoutParams = params
+            var paramsChanged = false
+            if (state.has("width")) {
+                val width = state.optInt("width").coerceAtLeast(1)
+                if (params.width != width) { params.width = width; paramsChanged = true }
+            }
+            if (state.has("height")) {
+                val height = state.optInt("height").coerceAtLeast(1)
+                if (params.height != height) { params.height = height; paramsChanged = true }
+            }
+            if (paramsChanged) {
+                view.layoutParams = params
+                geometryChanged = true
+                anyChanged = true
+            }
         }
-        if (state.has("alpha")) view.alpha = state.optDouble("alpha").toFloat().coerceIn(0.1f, 1f)
+        if (state.has("alpha")) {
+            val value = state.optDouble("alpha").toFloat().coerceIn(0.1f, 1f)
+            if (abs(view.alpha - value) > 0.001f) {
+                view.alpha = value
+                anyChanged = true
+            }
+        }
         if (view is TextView) {
-            if (state.has("text")) view.text = state.optString("text").take(120)
-            if (state.has("textColor")) view.setTextColor(state.optInt("textColor"))
-            if (state.has("textSizePx")) view.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, state.optDouble("textSizePx").toFloat())
+            if (state.has("text")) {
+                val value = state.optString("text").take(120)
+                if (view.text?.toString() != value) {
+                    view.text = value
+                    geometryChanged = true
+                    anyChanged = true
+                }
+            }
+            if (state.has("textColor")) {
+                val color = state.optInt("textColor")
+                if (view.currentTextColor != color) {
+                    view.setTextColor(color)
+                    anyChanged = true
+                }
+            }
+            if (state.has("textSizePx")) {
+                val size = state.optDouble("textSizePx").toFloat()
+                if (size > 0f && abs(view.textSize - size) > 0.5f) {
+                    view.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, size)
+                    geometryChanged = true
+                    anyChanged = true
+                }
+            }
         }
         if (state.has("backgroundTint")) {
-            view.backgroundTintList = ColorStateList.valueOf(state.optInt("backgroundTint"))
+            val color = state.optInt("backgroundTint")
+            if (view.backgroundTintList?.defaultColor != color) {
+                view.backgroundTintList = ColorStateList.valueOf(color)
+                anyChanged = true
+            }
         } else if (state.has("backgroundColor")) {
             val color = state.optInt("backgroundColor")
-            if (view.background == null) view.background = ColorDrawable(color)
-            else view.backgroundTintList = ColorStateList.valueOf(color)
+            if (view.background == null) {
+                view.background = ColorDrawable(color)
+                anyChanged = true
+            } else if (view.backgroundTintList?.defaultColor != color) {
+                view.backgroundTintList = ColorStateList.valueOf(color)
+                anyChanged = true
+            }
         }
-        if (view is ImageView && state.has("imageTint")) view.imageTintList = ColorStateList.valueOf(state.optInt("imageTint"))
+        if (view is ImageView && state.has("imageTint")) {
+            val color = state.optInt("imageTint")
+            if (view.imageTintList?.defaultColor != color) {
+                view.imageTintList = ColorStateList.valueOf(color)
+                anyChanged = true
+            }
+        }
         if (geometryChanged) {
             view.requestLayout()
             applyVisualPriority(view)
         }
-        view.invalidate()
+        if (anyChanged) view.invalidate()
     }
-
     @Synchronized
     private fun remember(view: View) {
         if (!originals.containsKey(view)) originals[view] = capture(view)
@@ -620,7 +683,11 @@ internal object QQInspectorGeometry {
     private fun matches(view: View, signature: MatchSignature): Boolean {
         if (view.javaClass.name != signature.viewClass || resourceName(view) != signature.resourceId) return false
         val parent = view.parent as? ViewGroup ?: return false
-        if (parent.javaClass.name != signature.parentClass || parent.indexOfChild(view) != signature.childIndex) return false
+        if (parent.javaClass.name != signature.parentClass) return false
+        // QQ/RecyclerView rows can insert or reorder siblings. For named controls the
+        // resource ID and ancestor structure are the stable identity; index is only a
+        // fallback for anonymous Views where there is no resource ID to disambiguate.
+        if (signature.resourceId == "NO_ID" && parent.indexOfChild(view) != signature.childIndex) return false
         val grandParentClass = (parent.parent as? View)?.javaClass?.name.orEmpty()
         return grandParentClass == signature.grandParentClass
     }
@@ -629,7 +696,7 @@ internal object QQInspectorGeometry {
         val matches = ArrayList<View>()
         var visited = 0
         fun walk(view: View, depth: Int) {
-            if (visited >= 520 || depth > 32 || matches.size >= 48) return
+            if (visited >= 1400 || depth > 36 || matches.size >= 64) return
             visited++
             if (view !== root && matches(view, signature) && view.isAttachedToWindow &&
                 view.visibility == View.VISIBLE && view.alpha > 0.03f &&

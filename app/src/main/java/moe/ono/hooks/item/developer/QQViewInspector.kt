@@ -2631,13 +2631,24 @@ private class InspectorOverlay private constructor(
                     }
                     "同类跟随" -> {
                         val count = QQInspectorGeometry.enableSameClassFollow(node.view)
+                        val persisted = count >= 0 && QQInspectorPersistentControls.save(activity, node.view)
                         buildToolbar()
-                        showInspectorToast(if (count >= 0) "同类跟随已开启，当前同步 $count 个控件；后续同类控件出现时也会自动应用" else "无法为此控件建立同类跟随")
+                        showInspectorToast(
+                            when {
+                                count < 0 -> "无法为此控件建立同类跟随"
+                                persisted -> "同类跟随已开启：当前同步 $count 个控件，后续新控件自动应用；规则已保存，离开页面再进入仍会恢复"
+                                else -> "同类跟随已在当前页面开启，但控件结构无法稳定保存；离开页面后可能需要重新开启"
+                            }
+                        )
                     }
                     "取消同类跟随" -> {
                         val restored = QQInspectorGeometry.cancelSameClassFollow(node.view)
+                        val persisted = QQInspectorPersistentControls.save(activity, node.view)
                         buildToolbar()
-                        showInspectorToast("已取消同类跟随，并还原跟随控件 $restored 个；所选控件自身设置保留")
+                        showInspectorToast(
+                            if (persisted) "已取消同类跟随并还原 $restored 个控件；所选控件原有修改仍会保留"
+                            else "已取消同类跟随，并还原跟随控件 $restored 个；所选控件自身设置保留"
+                        )
                     }
                     "禁用此控件" -> {
                         if (canModify(node) && InspectorControlState.disable(node.view)) {
