@@ -100,12 +100,26 @@ class MenuBuilderHook : ApiHookItem() {
         type: Class<*>,
         abstractOnly: Boolean
     ): java.lang.reflect.Method? {
-        return hierarchyMethods(type).firstOrNull { method ->
+        fun matches(method: java.lang.reflect.Method): Boolean =
             method.parameterTypes.isEmpty() &&
                 java.util.List::class.java.isAssignableFrom(method.returnType) &&
                 !Modifier.isStatic(method.modifiers) &&
+                !method.isBridge && !method.isSynthetic &&
                 (!abstractOnly || Modifier.isAbstract(method.modifiers))
+
+        // Prefer the original base class declaration. Only walk inherited methods
+        // when the declaring class has no matching candidate and the fallback is unique.
+        val declared = type.declaredMethods.filter(::matches)
+        if (declared.size == 1) return declared.single()
+        if (declared.size > 1) {
+            return declared.firstOrNull { method ->
+                method.name.contains("menu", ignoreCase = true) ||
+                    method.name.contains("action", ignoreCase = true)
+            }
         }
+        val inherited = hierarchyMethods(type).filter(::matches)
+            .distinctBy { it.name + "#" + it.returnType.name }
+        return inherited.singleOrNull()
     }
 
     private fun findListMethod(
