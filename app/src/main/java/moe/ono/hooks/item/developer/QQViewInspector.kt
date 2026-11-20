@@ -56,12 +56,13 @@ import kotlin.math.min
  * TNT view hierarchy inspector, implemented on the ONO hook framework.
  *
  * The inspector reads the current visible View tree of the user's own QQ process.
- * It never changes click listeners, dispatches clicks, reads input fields automatically,
- * captures screenshots, or transmits data to a server.
+ * With the local collection feature, it stores bounded visible TextView snippets (never EditText
+ * or password fields) and small per-control preview thumbnails. It never captures the full screen,
+ * changes click listeners, dispatches clicks, or transmits collected data to a server.
  */
 @HookItem(
     path = "黑壳区/控件探测器",
-    description = "开启后在 QQ 页面显示「控件」入口；可绘制控件边框、按面积从小到大列出控件，并查看类名、资源ID、坐标、透明度和链接。读取文本需单独确认。"
+    description = "在 QQ 页面探测控件、图片、JSON 和链接；控件会以样式快照保存到本地收集库，可查看并将样式模板应用到其他控件。仅采集可见文本控件（排除输入框/密码框）与单控件预览，不上传数据。"
 )
 class QQViewInspector : BaseSwitchFunctionHookItem() {
 
@@ -433,7 +434,7 @@ private object QQInspectorRuntime {
 }
 
 
-private data class InspectorNode(
+internal data class InspectorNode(
     val view: View,
     val className: String,
     val resourceId: String,
@@ -506,7 +507,7 @@ private object InspectorReflectionCache {
 }
 
 private object InspectorTree {
-    private const val MAX_NODES = 420
+    private const val MAX_NODES = 1400
     private const val MAX_DEPTH = 42
 
     fun collect(activity: Activity, capturedPageLinks: List<String>? = null): List<InspectorNode> {
@@ -616,11 +617,20 @@ private object InspectorTree {
      */
     private fun collectImageLinks(view: View): List<String> {
         val className = view.javaClass.name
+        val description = view.contentDescription?.toString().orEmpty()
+        var type: Class<*>? = view.javaClass
+        var imageMetadata = false
+        var hierarchyDepth = 0
+        while (type != null && type != View::class.java && hierarchyDepth++ < 4) {
+            if (InspectorReflectionCache.fields(type, "(image|img|pic|photo|cover|avatar|thumbnail|thumb|poster|origin)").isNotEmpty() ||
+                InspectorReflectionCache.methods(type, "(image|img|pic|photo|cover|avatar|thumbnail|thumb|poster|origin)").isNotEmpty()
+            ) imageMetadata = true
+            type = type.superclass
+        }
         val imageLike = view is ImageView ||
-            className.contains("image", ignoreCase = true) ||
-            className.contains("picture", ignoreCase = true) ||
-            className.contains("photo", ignoreCase = true) ||
-            className.contains("pic", ignoreCase = true)
+            InspectorReflectionCache.matches(className, "(image|picture|photo|avatar|thumbnail|thumb|poster|picview)") ||
+            imageMetadata ||
+            InspectorReflectionCache.matches(description, "(image|picture|photo|avatar|thumbnail)")
         if (!imageLike) return emptyList()
 
         val found = LinkedHashSet<String>()
@@ -634,130 +644,131 @@ private object InspectorTree {
             if (candidate.length !in 8..4096) return
             val safe = normalizeImageUrl(candidate) ?: return
             val uri = runCatching { Uri.parse(safe) }.getOrNull() ?: return
-            if (uri.scheme !in setOf("http", "https")) return
             val host = uri.host.orEmpty().lowercase(Locale.ROOT)
             val path = uri.path.orEmpty().lowercase(Locale.ROOT)
-            val imageHint = path.matches(Regex(".*\\.(png|jpe?g|gif|webp|bmp|heic|avif)(?:$|/).*")) ||
-                host.contains("qpic") || host.contains("qlogo") || host.contains("gtimg") ||
-                host.contains("qq.com") || host.contains("qcloud") ||
-                Regex("(image|img|pic|photo|thumb|origin|url|src)", RegexOption.IGNORE_CASE).containsMatchIn(source)
-            if (imageHint && found.add(safe)) {
-                // Keep the original signed query string; stripping it can invalidate CDN image URLs.
-                Unit
-            }
+            val hasImageExtension = Regex(".*\\.(png|jpe?g|gif|webp|bmp|heic|avif|svg)(?:$|/).*")
+                .containsMatchIn(path)
+            val knownImageHost = host.contains("qpic") || host.contains("qlogo") ||
+                host.contains("gtimg") || host.contains("qcloud") || host.contains("tencent")
+            val imageNamedSource = Regex("(image|img|pic|photo|avatar|cover|thumb|origin|poster|src)", RegexOption.IGNORE_CASE)
+                .containsMatchIn(source)
+            if ((hasImageExtension || knownImageHost || imageNamedSource) && found.size < 32) found.add(safe)
         }
 
-        accept(view.contentDescription?.toString(), "contentDescription")
-        accept(view.tag, "tag")
-        inspectUrlModel(view.tag, "tag", ::accept)
+        accept(view.contentDescription?.toString(), "image contentDescription")
+        accept(view.tag, "image tag")
+        inspectUrlModel(view.tag, "image.tag", ::accept)
+
         if (view is ImageView) {
             val drawable = view.drawable
-            accept(drawable?.toString(), "drawable")
-            inspectUrlModel(drawable, "drawable", ::accept)
             if (drawable != null) {
-                InspectorReflectionCache.methods(drawable.javaClass, "(uri|url|source|path)")
-                    .take(12).forEach { method -> runCatching { accept(method.invoke(drawable), "drawable.${method.name}") } }
+                inspectUrlModel(drawable, "image.drawable", ::accept)
                 var drawableType: Class<*>? = drawable.javaClass
                 var depth = 0
-                while (drawableType != null && drawableType != Any::class.java && depth++ < 3) {
-                    InspectorReflectionCache.fields(drawableType, "(uri|url|source|path|image)").take(40).forEach { field ->
-                            runCatching { field.isAccessible = true; accept(field.get(drawable), "drawable.${field.name}") }
+                while (drawableType != null && drawableType != Any::class.java && depth++ < 4) {
+                    InspectorReflectionCache.fields(drawableType, "(uri|url|source|path|image|img|pic|photo|origin)").take(32).forEach { field ->
+                        runCatching { field.isAccessible = true; accept(field.get(drawable), "drawable." + field.name) }
                     }
                     drawableType = drawableType.superclass
                 }
             }
         }
 
-        // QQ's message/image widgets sometimes retain their loader model on the view.
-        // Inspect only a small set of URL-like String fields; never recurse into arbitrary objects.
-        var type: Class<*>? = view.javaClass
-        var inspected = 0
-        while (type != null && type != View::class.java && inspected < 4) {
-            InspectorReflectionCache.fields(type, "(url|uri|image|img|pic|photo|origin|source|thumb|path|model|data)").take(80).forEach { field ->
-                val name = field.name
-                runCatching {
-                    field.isAccessible = true
-                    val value = field.get(view)
-                    accept(value, name)
-                    if (value != null && value !is String && value !is Number && value !is Boolean) {
-                        InspectorReflectionCache.methods(value.javaClass, "(url|uri|image|img|pic|photo|origin|source|thumb|path)")
-                            .take(16).forEach { getter -> runCatching { accept(getter.invoke(value), "$name.${getter.name}") } }
-                        InspectorReflectionCache.fields(value.javaClass, "(url|uri|image|img|pic|photo|origin|source|thumb|path)")
-                            .take(24).forEach { nested -> runCatching { nested.isAccessible = true; accept(nested.get(value), "$name.${nested.name}") } }
+        type = view.javaClass
+        hierarchyDepth = 0
+        while (type != null && type != View::class.java && hierarchyDepth++ < 5) {
+            InspectorReflectionCache.fields(type, "(url|uri|image|img|pic|photo|cover|avatar|origin|source|thumb|poster|path|model|data)")
+                .take(72).forEach { field ->
+                    runCatching {
+                        field.isAccessible = true
+                        val value = field.get(view)
+                        accept(value, field.name)
+                        if (value != null && value !is String && value !is Number && value !is Boolean) {
+                            inspectUrlModel(value, field.name, ::accept)
+                        }
                     }
                 }
-            }
+            InspectorReflectionCache.methods(type, "(get.*(url|uri|image|img|pic|photo|cover|avatar|origin|source|thumb|poster|path))")
+                .take(24).forEach { method ->
+                    runCatching { accept(method.invoke(view), method.name) }
+                }
             type = type.superclass
-            inspected++
         }
         return found.toList()
     }
 
+
     private fun collectCardJson(view: View): List<String> {
         val className = view.javaClass.name
         val cardLike = InspectorReflectionCache.matches(className, "(ark|card|struct|json|share|richmsg|arkview)")
-        val cardFieldPattern = "(ark|card|json|payload|extra|meta|struct|share|element|message|msg|content|data|rich|bundle|info)"
-        val hasCardFields = InspectorReflectionCache.fields(view.javaClass, cardFieldPattern).isNotEmpty() ||
-            InspectorReflectionCache.methods(view.javaClass, cardFieldPattern).isNotEmpty()
-        if (!cardLike && !hasCardFields && view !is TextView && view.tag == null && view.contentDescription == null) return emptyList()
+        val fieldPattern = "(ark|card|json|payload|extra|meta|struct|share|element|message|msg|content|data|rich|bundle|info)"
+        val hasPayloadFields = runCatching { InspectorReflectionCache.fields(view.javaClass, fieldPattern).isNotEmpty() }.getOrDefault(false)
+        val inspectPayloadGetters = cardLike || hasPayloadFields || view.tag != null || view.contentDescription != null
         val found = LinkedHashSet<String>()
-        fun accept(value: Any?) {
+
+        fun accept(value: Any?, source: String) {
             val raw = when (value) {
                 is String -> value
                 is JSONObject, is JSONArray -> value.toString()
                 else -> return
             }.trim()
-            if (raw.length !in 2..128_000) return
+            if (raw.length !in 8..64_000 || found.size >= 10) return
             val parsed = runCatching {
-                val unwrapped = if (raw.startsWith("\"") && raw.endsWith("\"")) org.json.JSONTokener(raw).nextValue()?.toString() ?: raw else raw
+                val unwrapped = if (raw.startsWith("\"") && raw.endsWith("\"")) {
+                    org.json.JSONTokener(raw).nextValue()?.toString() ?: raw
+                } else raw
                 when {
                     unwrapped.startsWith("{") -> JSONObject(unwrapped).toString(2)
                     unwrapped.startsWith("[") -> JSONArray(unwrapped).toString(2)
                     else -> null
                 }
             }.getOrNull() ?: return
-            val hasProtocolShape = InspectorReflectionCache.matches(
+
+            val looksProtocol = InspectorReflectionCache.matches(
                 parsed,
                 "(ark|appid|meta|prompt|view|config|jumpUrl|jump_url|qqdocurl|schema|share|struct|appurl)"
             )
-            val hasWebCardShape =
-                InspectorReflectionCache.matches(parsed, "(title|name)") &&
-                    InspectorReflectionCache.matches(parsed, "(url|jump|image|img|preview)") &&
-                    InspectorReflectionCache.matches(parsed, "(desc|description|meta|app|news|card|share)")
-            if (cardLike || hasProtocolShape || hasWebCardShape) found.add(parsed)
-        }
-        if (view is TextView && view !is EditText && !view.text.isNullOrBlank()) accept(view.text.toString())
-        fun inspectCardObject(value: Any?) {
-            if (value == null || value is String || value is Number || value is Boolean) return
-            if (cardLike) accept(value.toString())
-            InspectorReflectionCache.fields(value.javaClass, "(ark|card|json|payload|extra|meta|struct|share|element|message|msg|content|data|rich|bundle|info)").take(32).forEach { field ->
-                runCatching { field.isAccessible = true; accept(field.get(value)) }
+            val looksCard = InspectorReflectionCache.matches(parsed, "(title|name)") &&
+                InspectorReflectionCache.matches(parsed, "(url|jump|image|img|preview)") &&
+                InspectorReflectionCache.matches(parsed, "(desc|description|meta|app|news|card|share)")
+            val payloadSource = InspectorReflectionCache.matches(source, "(json|payload|extra|meta|struct|card|ark|share|data|content|msg|message)")
+            if (cardLike || looksProtocol || looksCard || payloadSource || source == "visibleText") {
+                found.add(parsed.take(64_000))
             }
-            InspectorReflectionCache.methods(value.javaClass, "(ark|card|json|payload|extra|meta|struct|share|element|message|msg|content|data|rich|bundle|info)").take(12).forEach { getter -> runCatching { accept(getter.invoke(value)) } }
         }
-        accept(view.tag)
-        inspectCardObject(view.tag)
-        accept(view.contentDescription)
+
+        if (view is TextView && view !is EditText) {
+            runCatching { view.text?.toString() }.getOrNull()?.let { accept(it, "visibleText") }
+        }
+        accept(view.tag, "tag")
+        accept(view.contentDescription, "contentDescription")
+
         var type: Class<*>? = view.javaClass
         var depth = 0
-        while (type != null && type != View::class.java && depth++ < 4) {
-            InspectorReflectionCache.fields(type, "(ark|card|json|payload|extra|meta|struct|share|element|message|msg|content|data|rich|bundle|info)")
-                .take(48).forEach { field ->
-                    runCatching {
-                        field.isAccessible = true
-                        val value = field.get(view)
-                        accept(value)
-                        if (value != null && value !is String && value !is Number && value !is Boolean) {
-                            InspectorReflectionCache.fields(value.javaClass, "(ark|card|json|payload|extra|meta|struct|share)")
-                                .take(24).forEach { nested -> runCatching { nested.isAccessible = true; accept(nested.get(value)) } }
-                            InspectorReflectionCache.methods(value.javaClass, "(ark|card|json|payload|extra|meta|struct|share)")
-                                .take(12).forEach { getter -> runCatching { accept(getter.invoke(value)) } }
+        while (type != null && type != View::class.java && depth++ < 5) {
+            InspectorReflectionCache.fields(type, fieldPattern).take(64).forEach { field ->
+                runCatching {
+                    field.isAccessible = true
+                    val value = field.get(view)
+                    accept(value, field.name)
+                    if (value != null && value !is String && value !is Number && value !is Boolean) {
+                        InspectorReflectionCache.fields(value.javaClass, fieldPattern).take(32).forEach { nested ->
+                            runCatching { nested.isAccessible = true; accept(nested.get(value), field.name + "." + nested.name) }
                         }
+                        InspectorReflectionCache.methods(value.javaClass, "(get.*(json|payload|extra|meta|struct|card|ark|data|content))")
+                            .take(12).forEach { getter -> runCatching { accept(getter.invoke(value), field.name + "." + getter.name) } }
                     }
                 }
+            }
+            if (inspectPayloadGetters) {
+                InspectorReflectionCache.methods(type, "(get.*(json|payload|extra|meta|struct|card|ark|data|content|element|share))")
+                    .take(10).forEach { getter ->
+                        runCatching { accept(getter.invoke(view), getter.name) }
+                    }
+            }
             type = type.superclass
         }
-        return found.take(6)
+        return found.toList()
     }
 
     private fun collectLinks(view: View): List<String> {
@@ -769,13 +780,9 @@ private object InspectorTree {
                     QQInspectorLinks.sanitize(span.url)?.let(found::add)
                 }
             }
-            // 很多控件里的链接只是纯文本，没有 URLSpan，这里补一层正则解析
             val plain = runCatching { value?.toString() }.getOrNull()
-            if (!plain.isNullOrBlank()) {
-                QQInspectorLinks.extractUrls(plain).take(16).forEach { url ->
-                    QQInspectorLinks.sanitize(url)?.let(found::add)
-                }
-            }
+            if (!plain.isNullOrBlank()) QQInspectorLinks.extractUrls(plain).take(24)
+                .forEach { QQInspectorLinks.sanitize(it)?.let(found::add) }
         }
 
         val className = view.javaClass.name
@@ -785,56 +792,60 @@ private object InspectorTree {
         if (webViewLike) {
             listOf("getUrl", "getOriginalUrl", "getCurrentUrl", "getWebUrl").forEach { methodName ->
                 val raw = runCatching {
-                    view.javaClass.methods.firstOrNull {
-                        it.name == methodName && it.parameterTypes.isEmpty()
-                    }?.invoke(view)?.toString()
+                    view.javaClass.methods.firstOrNull { it.name == methodName && it.parameterTypes.isEmpty() }
+                        ?.invoke(view)?.toString()
                 }.getOrNull()
-                if (!raw.isNullOrBlank()) {
-                    QQInspectorLinks.sanitize(raw)?.let(found::add)
-                }
+                if (!raw.isNullOrBlank()) QQInspectorLinks.sanitize(raw)?.let(found::add)
             }
         }
 
-        // Also inspect explicit URL-like metadata exposed by visible controls. This catches
-        // app jump targets stored in tags/model fields even when the view has no URLSpan.
         fun acceptModelLink(value: Any?, source: String) {
-            val raw = when (value) {
-                is String -> value
-                is Uri -> value.toString()
-                else -> return
-            }.trim()
-            if (raw.length !in 5..4096) return
-            val scheme = runCatching { Uri.parse(raw).scheme?.lowercase(Locale.ROOT) }.getOrNull()
-            if (scheme !in setOf("http", "https", "intent", "mqq", "mqqapi", "mqqwpa", "qqdocurl", "qq", "tim", "tencent")) return
-            QQInspectorLinks.sanitize(raw)?.let(found::add)
+            when (value) {
+                is String -> {
+                    val raw = value.trim()
+                    QQInspectorLinks.sanitize(raw)?.let(found::add)
+                    QQInspectorLinks.extractUrls(raw).forEach { QQInspectorLinks.sanitize(it)?.let(found::add) }
+                }
+                is Uri -> QQInspectorLinks.sanitize(value.toString())?.let(found::add)
+                is JSONObject, is JSONArray -> QQInspectorLinks.extractUrls(value.toString())
+                    .forEach { QQInspectorLinks.sanitize(it)?.let(found::add) }
+            }
         }
         acceptModelLink(view.contentDescription, "contentDescription")
         acceptModelLink(view.tag, "tag")
-        val linkFieldPattern = "(url|uri|link|scheme|jump|target|redirect|deeplink|deep_link)"
-        var modelType: Class<*>? = view.javaClass
-        var modelDepth = 0
-        while (modelType != null && modelType != View::class.java && modelDepth++ < 3) {
-            InspectorReflectionCache.fields(modelType, linkFieldPattern)
-                .take(32).forEach { field ->
-                    runCatching {
-                        field.isAccessible = true
-                        val value = field.get(view)
-                        acceptModelLink(value, field.name)
-                        if (value != null && value !is String && value !is Number && value !is Boolean) {
-                            InspectorReflectionCache.fields(value.javaClass, linkFieldPattern)
-                                .take(20).forEach { nested ->
-                                    runCatching {
-                                        nested.isAccessible = true
-                                        acceptModelLink(nested.get(value), field.name + "." + nested.name)
-                                    }
-                                }
+
+        val linkPattern = "(url|uri|link|scheme|jump|target|redirect|deeplink|deep_link|href|route)"
+        val inspectGetters = view.isClickable || view.isLongClickable || view.tag != null ||
+            view.contentDescription != null ||
+            InspectorReflectionCache.matches(className, "(web|link|card|share|ark|jump|scheme)")
+        var type: Class<*>? = view.javaClass
+        var depth = 0
+        while (type != null && type != View::class.java && depth++ < 5) {
+            InspectorReflectionCache.fields(type, linkPattern).take(48).forEach { field ->
+                runCatching {
+                    field.isAccessible = true
+                    val value = field.get(view)
+                    acceptModelLink(value, field.name)
+                    if (value != null && value !is String && value !is Number && value !is Boolean) {
+                        InspectorReflectionCache.fields(value.javaClass, linkPattern).take(24).forEach { nested ->
+                            runCatching { nested.isAccessible = true; acceptModelLink(nested.get(value), field.name + "." + nested.name) }
                         }
+                        InspectorReflectionCache.methods(value.javaClass, "(get.*(url|uri|link|scheme|jump|target|href))")
+                            .take(12).forEach { getter -> runCatching { acceptModelLink(getter.invoke(value), field.name + "." + getter.name) } }
                     }
                 }
-            modelType = modelType.superclass
+            }
+            if (inspectGetters) {
+                InspectorReflectionCache.methods(type, "(get.*(url|uri|link|scheme|jump|target|href|deeplink))")
+                    .take(12).forEach { getter ->
+                        runCatching { acceptModelLink(getter.invoke(view), getter.name) }
+                    }
+            }
+            type = type.superclass
         }
         return found.toList()
     }
+
 
 }
 
@@ -1235,6 +1246,7 @@ private class InspectorOverlay private constructor(
     private var multiSelect = false
     private data class PendingControlAction(val target: View, val action: String)
     private var pendingControlAction: PendingControlAction? = null
+    private var pendingCollectedRecord: JSONObject? = null
     private var positionEditTarget: View? = null
     private var positionStepDp = 1
     private val selectedViews = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<View, Boolean>())
@@ -1281,7 +1293,28 @@ private class InspectorOverlay private constructor(
                 runSafely {
                     if (!selected.view.isAttachedToWindow || selected.view.parent == null) {
                         pendingControlAction = null
+                        pendingCollectedRecord = null
                         showInspectorToast("该控件已离开当前页面，请刷新控件列表")
+                        return@runSafely
+                    }
+                    val collectedTemplate = pendingCollectedRecord
+                    if (collectedTemplate != null) {
+                        pendingCollectedRecord = null
+                        pendingControlAction = null
+                        val changed = QQInspectorCollectedControls.applyTemplate(selected.view, collectedTemplate)
+                        val saved = QQInspectorPersistentControls.save(activity, selected.view)
+                        boxes.setPickMode(false)
+                        boxes.setPickAnyControl(false)
+                        boxes.setSelectedViews(listOf(selected.view))
+                        selectedViews.clear()
+                        selectedViews.add(selected.view)
+                        buildToolbar()
+                        refresh()
+                        showInspectorToast(
+                            if (changed > 0 && saved) "自定义控件已应用 " + changed + " 项样式，并已保存；可继续编辑或控制该控件"
+                            else if (changed > 0) "自定义样式已应用 " + changed + " 项，但无法稳定持久定位此控件"
+                            else "当前控件与样本没有可兼容的样式项目；图片只能替换 ImageView，文字只能替换 TextView"
+                        )
                         return@runSafely
                     }
                     if (pending != null) {
@@ -1509,7 +1542,12 @@ private class InspectorOverlay private constructor(
         addRow("✦  扫描当前页面" to { scanCurrentPage() },
             colors = intArrayOf(0xFF00A9D6.toInt(), 0xFF1767C5.toInt()))
         addRow("↻  刷新控件树" to { refresh() }, "▦  控件列表 · ${nodes.size}" to { showList() })
-        addRow("▧  图片 / 卡片数据" to { pullCardData() }, "⌁  保存页面链接" to { saveCurrentLinks() })
+        addRow("▧  图片 / JSON 数据" to { pullCardData() }, "⌁  保存页面链接" to { saveCurrentLinks() })
+        addRow("▤  控件收集库 · " + QQInspectorCollectedControls.count() to { showCollectedControls(null) },
+            "✦  自定义控件" to {
+                val target = nodes.firstOrNull { it.view in selectedViews }?.view
+                if (target == null) showCollectedControls(null) else showCollectedControls(target)
+            }, colors = intArrayOf(0xFF2877B8.toInt(), 0xFF7357D8.toInt()))
         addRow("⌕  快速查找控件" to { searchControls() }, "◎  页面诊断" to { QQInspectorDiagnostics.show(activity) },
             colors = intArrayOf(0xFF188F9F.toInt(), 0xFF2763A7.toInt()))
 
@@ -1561,6 +1599,16 @@ private class InspectorOverlay private constructor(
                 boxes.setPickMode(false)
                 buildToolbar()
                 showInspectorToast("已取消控件选择操作")
+            }, colors = intArrayOf(0xFF9B4C50.toInt(), 0xFF70415F.toInt()))
+        }
+        if (pendingCollectedRecord != null) {
+            addRow("取消自定义控件选择" to {
+                pendingCollectedRecord = null
+                pickMode = false
+                boxes.setPickAnyControl(false)
+                boxes.setPickMode(false)
+                buildToolbar()
+                showInspectorToast("已取消自定义控件替换")
             }, colors = intArrayOf(0xFF9B4C50.toInt(), 0xFF70415F.toInt()))
         }
         addRow((if (pickMode) "●  点选模式：开" else "○  点选模式：关") to { togglePickMode() },
@@ -1820,6 +1868,10 @@ private class InspectorOverlay private constructor(
             pendingControlAction = null
             boxes.setPickAnyControl(false)
         }
+        if (pendingCollectedRecord != null) {
+            pendingCollectedRecord = null
+            boxes.setPickAnyControl(false)
+        }
         pickMode = !pickMode
         boxes.setPickMode(pickMode)
         if (!pickMode && multiSelect) {
@@ -1894,6 +1946,7 @@ private class InspectorOverlay private constructor(
             InspectorTree.collect(activity)
         }.onSuccess { refreshed ->
             nodes = refreshed
+            QQInspectorCollectedControls.capture(activity, refreshed)
             boxes.setNodes(nodes)
             buildToolbar()
             showInspectorToast("已重新扫描 ${nodes.size} 个控件")
@@ -1936,6 +1989,7 @@ private class InspectorOverlay private constructor(
             emptyList()
         }
         nodes = scanned
+        QQInspectorCollectedControls.capture(activity, scanned)
         runCatching { boxes.setNodes(nodes) }
             .onFailure { Logger.w("TNT page scan overlay update failed: ${it.javaClass.simpleName}") }
 
@@ -1956,7 +2010,9 @@ private class InspectorOverlay private constructor(
         val links = (activityLinks + scanned.flatMap { it.directLinks + it.links } + webDocument.links)
             .map { it.trim() }.filter { it.isNotEmpty() }.distinct()
         val images = (scanned.flatMap { it.imageLinks } + webDocument.images).distinct()
+        val imageControls = scanned.filter { it.view is ImageView || Regex("(image|picture|photo|avatar|thumbnail|picview)", RegexOption.IGNORE_CASE).containsMatchIn(it.className) }
         val cards = (scanned.flatMap { it.cardJsons } + webDocument.cards).distinct()
+        val collectedCount = QQInspectorCollectedControls.count()
         val storedImageLocations = QQInspectorLinks.readAll()
             .filter { QQInspectorLinks.isImageKind(it.optString("kind")) && it.optString("url") in images }
             .groupBy { it.optString("url") }
@@ -1968,8 +2024,10 @@ private class InspectorOverlay private constructor(
             append("\nActivity 与可见控件链接：").append(activityLinks.size)
             append("\nWebView DOM 链接：").append(webDocument.links.size)
             append("\n当前页面链接（去重）：").append(links.size)
-            append("\n当前页面图片直链：").append(images.size)
+            append("\n当前页面图片控件：").append(imageControls.size)
+            append("\n图片直链：").append(images.size)
             append("\nWebView 图片元素：").append(webDocument.images.size)
+            append("\n本地控件收集库：").append(collectedCount).append(" 条")
             append("\n当前页面 JSON / Ark 卡片：").append(cards.size)
             if (treeError != null) {
                 append("\n控件树扫描状态：部分控件读取失败，已保留其他来源的数据")
@@ -1980,6 +2038,14 @@ private class InspectorOverlay private constructor(
             append("\n\n【当前页面图片直链 / 所在位置】")
             if (images.isEmpty()) {
                 append("\n未发现可用图片直链")
+                if (imageControls.isNotEmpty()) {
+                    append("\n但识别到 ").append(imageControls.size).append(" 个图片控件（QQ 当前未暴露原始图片 URL）")
+                    imageControls.take(20).forEach { image ->
+                        append("\n· ").append(image.className.substringAfterLast('.'))
+                            .append(" / ").append(image.resourceId)
+                            .append(" · ").append(image.width).append("×").append(image.height)
+                    }
+                }
             } else {
                 images.forEachIndexed { index, image ->
                     append("\n").append(index + 1).append(". ").append(image)
@@ -1993,7 +2059,7 @@ private class InspectorOverlay private constructor(
             else cards.forEachIndexed { index, json ->
                 append("\n\n--- 当前页面数据 ").append(index + 1).append(" ---\n").append(json)
             }
-            append("\n\n说明：数据来自本次扫描时当前 Activity、可见控件与当前 WebView DOM；不包含历史消息缓存、其他页面数据、Cookie 或网络请求正文。")
+            append("\n\n说明：控件快照保存在 TNT 本地收集库；图片直链和页面链接来自当前 Activity、可见控件与 WebView DOM。不包含 Cookie、登录密钥或网络请求正文。")
         }
 
         runCatching {
@@ -2036,13 +2102,15 @@ private class InspectorOverlay private constructor(
         runSafely {
             val scanned = InspectorTree.collect(activity)
             nodes = scanned
+            QQInspectorCollectedControls.capture(activity, scanned)
             boxes.setNodes(nodes)
             QQInspectorLinks.scanVisibleWebDocuments(activity) { webDocument ->
                 if (activity.isFinishing || activity.isDestroyed || parent == null) return@scanVisibleWebDocuments
                 val cards = (scanned.flatMap { it.cardJsons } + webDocument.cards).distinct()
                 val images = (scanned.flatMap { it.imageLinks } + webDocument.images).distinct()
-                if (cards.isEmpty() && images.isEmpty()) {
-                    showInspectorToast("当前页面暂未发现可用图片直链或卡片 JSON")
+                val imageControls = scanned.filter { it.view is ImageView || Regex("(image|picture|photo|avatar|thumbnail|picview)", RegexOption.IGNORE_CASE).containsMatchIn(it.className) }
+                if (cards.isEmpty() && images.isEmpty() && imageControls.isEmpty()) {
+                    showInspectorToast("当前页面暂未发现图片控件、图片直链或 JSON 数据")
                     buildToolbar()
                     return@scanVisibleWebDocuments
                 }
@@ -2057,6 +2125,11 @@ private class InspectorOverlay private constructor(
                         append("\n\n[").append(index + 1).append("] ").append(image)
                         val location = latestRows[image]?.optString("location").orEmpty()
                         if (location.isNotBlank()) append("\n出现位置：").append(location)
+                    }
+                    append("\n\n当前页面识别到图片控件（").append(imageControls.size).append("）")
+                    imageControls.take(40).forEachIndexed { index, item ->
+                        append("\n").append(index + 1).append(". ").append(item.className.substringAfterLast('.'))
+                            .append(" · ").append(item.resourceId).append(" · ").append(item.width).append("×").append(item.height)
                     }
                     append("\n\n当前页面 JSON / Ark 卡片（").append(cards.size).append("）")
                     cards.forEachIndexed { index, json ->
@@ -2423,6 +2496,151 @@ private class InspectorOverlay private constructor(
             .showInspectorStyled(activity)
     }
 
+    private fun showCollectedControls(target: View?) {
+        val records = QQInspectorCollectedControls.all()
+        if (records.isEmpty()) {
+            AlertDialog.Builder(activity)
+                .setTitle("控件收集库")
+                .setMessage("收集库暂时为空。扫描或刷新当前页面后，遇到的可见控件会自动收录。")
+                .setPositiveButton("立即扫描") { _, _ -> scanCurrentPage() }
+                .setNegativeButton("关闭", null)
+                .showInspectorStyled(activity)
+            return
+        }
+        val labels = records.mapIndexed { index, record ->
+            val kind = when (record.optString("kind")) {
+                "IMAGE" -> "图片"
+                "TEXT" -> "文字"
+                "CONTAINER" -> "容器"
+                else -> "控件"
+            }
+            val caption = record.optString("textContent").replace('\n', ' ').take(38)
+            (index + 1).toString() + ". [" + kind + "] " +
+                record.optString("title").take(48) + "\n" +
+                record.optString("class").substringAfterLast('.') + " · " +
+                record.optInt("width") + "×" + record.optInt("height") +
+                if (caption.isNotBlank()) "\n" + caption else ""
+        }.toTypedArray()
+        AlertDialog.Builder(activity)
+            .setTitle("控件收集库 · " + records.size + " 条")
+            .setItems(labels) { _, which ->
+                records.getOrNull(which)?.let { showCollectedControlDetail(it, target) }
+            }
+            .setNeutralButton("清空收集库") { _, _ ->
+                val count = QQInspectorCollectedControls.clear()
+                buildToolbar()
+                showInspectorToast("已清空本地控件收集库，共删除 " + count + " 条")
+            }
+            .setNegativeButton("关闭", null)
+            .showInspectorStyled(activity, .88f)
+    }
+
+    private fun showCollectedControlDetail(record: JSONObject, target: View?) {
+        val content = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(activity, 14), dp(activity, 10), dp(activity, 14), dp(activity, 12))
+        }
+        val preview = QQInspectorCollectedControls.decodePreview(record)
+        if (preview != null) {
+            content.addView(ImageView(activity).apply {
+                setImageBitmap(preview)
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                adjustViewBounds = true
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(activity, 12).toFloat()
+                    setColor(0xFFE2ECF5.toInt())
+                    setStroke(dp(activity, 1), 0xB8C9DCEB.toInt())
+                }
+                setPadding(dp(activity, 4), dp(activity, 4), dp(activity, 4), dp(activity, 4))
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(activity, 160)))
+        }
+        val backgroundLabel = if (record.optBoolean("hasBackgroundColor")) {
+            "#%08X".format(record.optInt("backgroundColor"))
+        } else record.optString("backgroundClass").ifBlank { "无可读取的纯色背景" }
+        val textColorLabel = if (record.optBoolean("hasTextColor")) {
+            "#%08X".format(record.optInt("textColor"))
+        } else "无"
+        val imageLinks = record.optJSONArray("imageLinks") ?: JSONArray()
+        val links = record.optJSONArray("links") ?: JSONArray()
+        val jsonRows = record.optJSONArray("json") ?: JSONArray()
+        val message = buildString {
+            append("类型：").append(record.optString("kind"))
+            append("\n控件：").append(record.optString("class"))
+            append("\n资源 ID：").append(record.optString("resource"))
+            append("\n父级：").append(record.optString("parent"))
+            append("\n尺寸：").append(record.optInt("width")).append(" × ").append(record.optInt("height"))
+            append("\n背景：").append(backgroundLabel)
+            append("\n透明度：").append(record.optDouble("alpha"))
+            append("\n文字颜色：").append(textColorLabel)
+            if (record.optBoolean("hasText")) {
+                append("\n文字大小：").append(record.optDouble("textSizePx")).append(" px")
+                append("\n\n内容：\n").append(record.optString("textContent"))
+            }
+            append("\n\n图片直链：")
+            append(if (imageLinks.length() == 0) "未暴露直链" else "\n" + (0 until imageLinks.length()).joinToString("\n") { imageLinks.optString(it) })
+            append("\n\n链接：")
+            append(if (links.length() == 0) "无" else "\n" + (0 until links.length()).joinToString("\n") { links.optString(it) })
+            append("\n\nJSON：")
+            append(if (jsonRows.length() == 0) "无" else "\n" + (0 until jsonRows.length()).joinToString("\n\n") { jsonRows.optString(it).take(2400) })
+            append("\n\n遇见次数：").append(record.optInt("seenCount"))
+        }
+        content.addView(TextView(activity).apply {
+            text = message
+            textSize = 12f
+            setTextColor(0xFF1D344B.toInt())
+            setTextIsSelectable(true)
+            setHorizontallyScrolling(false)
+            setLineSpacing(dp(activity, 2).toFloat(), 1f)
+            setPadding(0, dp(activity, 10), 0, 0)
+        })
+        val scroll = android.widget.ScrollView(activity).apply {
+            addView(content, ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+        }
+        val dialog = AlertDialog.Builder(activity)
+            .setTitle("控件样本 · " + record.optString("title"))
+            .setView(scroll)
+            .setPositiveButton(if (target != null) "应用到当前控件" else "选择目标控件") { _, _ ->
+                if (target != null && target.parent != null) {
+                    val changed = QQInspectorCollectedControls.applyTemplate(target, record)
+                    val saved = QQInspectorPersistentControls.save(activity, target)
+                    refresh()
+                    showInspectorToast(
+                        if (changed > 0 && saved) "自定义控件已应用 " + changed + " 项样式并保存；仍可用控件改变和位置控制继续修改"
+                        else if (changed > 0) "样式已应用 " + changed + " 项，但无法稳定持久定位此控件"
+                        else "没有兼容的样式项目可应用；图片只支持 ImageView，文字只支持 TextView"
+                    )
+                } else {
+                    pendingCollectedRecord = JSONObject(record.toString())
+                    pendingControlAction = null
+                    positionEditTarget = null
+                    boxes.setEditTarget(null)
+                    boxes.setPickAnyControl(true)
+                    pickMode = true
+                    multiSelect = false
+                    boxes.setMultiSelect(false)
+                    boxes.setPickMode(true)
+                    buildToolbar()
+                    showInspectorToast("已选中样本，请在当前页面点击要替换样式的目标控件")
+                }
+            }
+            .setNeutralButton("删除样本") { _, _ ->
+                QQInspectorCollectedControls.delete(record.optString("id"))
+                buildToolbar()
+                showInspectorToast("已从本地收集库删除该样本")
+            }
+            .setNegativeButton("返回", null)
+            .create()
+        dialog.show()
+        dialog.window?.let { window ->
+            window.setLayout(
+                (activity.resources.displayMetrics.widthPixels * .9f).toInt().coerceAtMost(dp(activity, 480)),
+                (activity.resources.displayMetrics.heightPixels * .78f).toInt().coerceAtMost(dp(activity, 720))
+            )
+        }
+    }
+
     private fun showNode(node: InspectorNode) {
         // Merge image and control views that occupy substantially the same visible rectangle.
         // QQ often wraps an image in a clickable message/card container; selecting either layer
@@ -2499,6 +2717,7 @@ private class InspectorOverlay private constructor(
             actions.add("顶替此控件")
             actions.add("位置控制")
             actions.add("控件改变")
+            actions.add("自定义控件（从收集库替换）")
             actions.add(if (QQInspectorGeometry.hasSameClassFollow(node.view)) "取消同类跟随" else "同类跟随")
             if (node.view.isEnabled) actions.add("禁用此控件")
             if (node.resourceId != "NO_ID") {
@@ -2618,6 +2837,7 @@ private class InspectorOverlay private constructor(
                     "交换位置" -> startControlSelection(node.view, "swap")
                     "顶替此控件" -> startControlSelection(node.view, "replace")
                     "位置控制" -> startPositionControl(node)
+                    "自定义控件（从收集库替换）" -> showCollectedControls(node.view)
                     "控件改变" -> QQInspectorStyleEditor.show(activity, node.view) { changed ->
                         val persisted = QQInspectorPersistentControls.save(activity, node.view)
                         refresh()
@@ -2783,6 +3003,7 @@ private class InspectorOverlay private constructor(
             QQInspectorPersistentControls.save(activity, it)
         }
         pendingControlAction = null
+        pendingCollectedRecord = null
         positionEditTarget = null
         boxes.setPickAnyControl(false)
         boxes.setEditTarget(null)
@@ -2803,6 +3024,7 @@ private class InspectorOverlay private constructor(
                 val initialNodes = runCatching { InspectorTree.collect(activity) }
                     .onFailure { Logger.e("TNT inspector initial scan failed", it) }
                     .getOrDefault(emptyList())
+                QQInspectorCollectedControls.capture(activity, initialNodes)
                 val overlay = InspectorOverlay(activity, root, initialNodes)
                 root.addView(overlay, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             }.onFailure {
@@ -3246,7 +3468,7 @@ internal object QQInspectorLinks {
         val webViews = ArrayList<View>()
         var visited = 0
         fun walk(view: View) {
-            if (visited++ >= 1400 || webViews.size >= 8) return
+            if (visited++ >= 2400 || webViews.size >= 12) return
             if (view is InspectorOverlay || view.tag == "tnt.qq.inspector.entry") return
             if (view.visibility != View.VISIBLE || view.alpha <= 0.03f || !view.isShown) return
             val className = view.javaClass.name
@@ -3255,7 +3477,7 @@ internal object QQInspectorLinks {
             }
             if (view is ViewGroup) {
                 for (index in 0 until view.childCount) {
-                    if (webViews.size >= 8) break
+                    if (webViews.size >= 12) break
                     walk(view.getChildAt(index))
                 }
             }
@@ -3284,47 +3506,84 @@ internal object QQInspectorLinks {
             activity.runOnUiThread { onComplete(result) }
         }
 
-        handler.postDelayed({ finish() }, 2400L)
+        handler.postDelayed({ finish() }, 4200L)
 
         val script = """
             (function() {
               try {
                 const visible = (e) => {
                   const r = e.getBoundingClientRect();
-                  const s = window.getComputedStyle(e);
-                  return r.width > 0 && r.height > 0 && s.display !== 'none' &&
-                    s.visibility !== 'hidden' && Number(s.opacity || 1) > 0.02;
+                  const st = window.getComputedStyle(e);
+                  return r.width > 0 && r.height > 0 && st.display !== 'none' &&
+                    st.visibility !== 'hidden' && Number(st.opacity || 1) > 0.02;
                 };
+                const unique = (items) => Array.from(new Set(items.filter(Boolean))).slice(0, 240);
                 const linkNodes = Array.from(document.querySelectorAll(
-                  'a[href],area[href],[data-url],[data-href],[data-jump-url],[data-scheme]'
-                )).filter(visible).slice(0, 120);
-                const urls = linkNodes.map(e =>
+                  'a[href],area[href],[data-url],[data-href],[data-jump-url],[data-scheme],[data-link],[data-target]'
+                )).filter(visible).slice(0, 240);
+                const resolveUrl = (value) => {
+                  if (!value) return '';
+                  try { return new URL(String(value).trim(), document.baseURI).href; }
+                  catch (_) { return String(value).trim(); }
+                };
+                const urls = unique(linkNodes.map(e => resolveUrl(
                   e.href || e.getAttribute('data-url') || e.getAttribute('data-href') ||
-                  e.getAttribute('data-jump-url') || e.getAttribute('data-scheme') || ''
-                ).filter(Boolean);
-                const imageNodes = Array.from(document.querySelectorAll(
-                  'img[src],img[data-src],img[data-original],source[src],video[poster]'
-                )).filter(visible).slice(0, 80);
-                const imgs = imageNodes.map(e => {
-                  const r = e.getBoundingClientRect();
-                  return {
-                    url: e.currentSrc || e.src || e.getAttribute('data-src') ||
-                      e.getAttribute('data-original') || e.getAttribute('poster') || '',
+                  e.getAttribute('data-jump-url') || e.getAttribute('data-scheme') ||
+                  e.getAttribute('data-link') || e.getAttribute('data-target') || ''
+                )));
+                const images = [];
+                const addImage = (url, e, kind) => {
+                  if (!url || images.length >= 240) return;
+                  const r = e && e.getBoundingClientRect ? e.getBoundingClientRect() :
+                    {left:0,top:0,width:0,height:0};
+                  images.push({
+                    url: resolveUrl(url),
                     x: Math.round(r.left + window.scrollX),
                     y: Math.round(r.top + window.scrollY),
                     width: Math.round(r.width),
                     height: Math.round(r.height),
-                    alt: (e.alt || e.getAttribute('aria-label') || '').slice(0, 80)
-                  };
-                }).filter(e => !!e.url);
+                    alt: ((e && (e.alt || e.getAttribute('aria-label'))) || kind || '').slice(0, 80)
+                  });
+                };
+                Array.from(document.querySelectorAll(
+                  'img[src],img[srcset],img[data-src],img[data-original],img[data-lazy-src],source[src],source[srcset],video[poster],svg image'
+                )).filter(visible).slice(0, 180).forEach(e => {
+                  const srcset = e.getAttribute('srcset') || '';
+                  const srcsetUrls = srcset.split(',').map(x => x.trim().split(/\s+/)[0]).filter(Boolean);
+                  addImage(e.currentSrc || e.src || e.getAttribute('data-src') ||
+                    e.getAttribute('data-original') || e.getAttribute('data-lazy-src') ||
+                    e.getAttribute('poster') || e.getAttribute('href') ||
+                    e.getAttribute('xlink:href') || srcsetUrls[0], e, 'img');
+                  srcsetUrls.slice(0, 4).forEach(url => addImage(url, e, 'srcset'));
+                });
+                Array.from(document.querySelectorAll('*')).slice(0, 1600).filter(visible).slice(0, 900).forEach(e => {
+                  const bg = window.getComputedStyle(e).backgroundImage || '';
+                  const matches = bg.match(/url\((?:&quot;|['"])?([^'")]+)(?:&quot;|['"])?\)/g) || [];
+                  matches.slice(0, 4).forEach(m => {
+                    const u = m.replace(/^url\((?:&quot;|['"])?/,'').replace(/(?:&quot;|['"])?\)$/,'');
+                    addImage(u, e, 'css-background');
+                  });
+                });
+                try {
+                  const resources = performance.getEntriesByType('resource') || [];
+                  resources.filter(r => r.initiatorType === 'img' ||
+                    /\.(png|jpe?g|gif|webp|bmp|avif|heic|svg)(?:[?#]|$)/i.test(r.name))
+                    .slice(0, 180).forEach(r => addImage(r.name, null, 'resource'));
+                } catch (_) {}
                 const dataNodes = Array.from(document.querySelectorAll(
-                  'script[type="application/ld+json"],script[type="application/json"],[data-ark],[data-card-json]'
-                )).slice(0, 24);
+                  'script[type*="json"],[data-ark],[data-card-json],[data-json],[data-payload],pre'
+                )).slice(0, 80);
                 const jsons = dataNodes.map(e =>
                   e.textContent || e.getAttribute('data-ark') ||
-                  e.getAttribute('data-card-json') || ''
-                ).filter(v => v.length >= 8 && v.length <= 24000);
-                return JSON.stringify({ links: urls, images: imgs, cards: jsons });
+                  e.getAttribute('data-card-json') || e.getAttribute('data-json') ||
+                  e.getAttribute('data-payload') || ''
+                ).filter(v => v.length >= 8 && v.length <= 64000)
+                  .filter(v => /^\s*[\[{]/.test(v));
+                return JSON.stringify({
+                  links: urls,
+                  images: images.slice(0, 240),
+                  cards: unique(jsons).slice(0, 80)
+                });
               } catch (_) {
                 return JSON.stringify({ links: [], images: [], cards: [] });
               }

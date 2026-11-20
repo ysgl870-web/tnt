@@ -1,9 +1,13 @@
 package moe.ono.hooks.item.developer
 
 import android.content.res.ColorStateList
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Rect
+import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
+import android.util.Base64
 import android.text.SpannedString
 import android.view.View
 import android.view.ViewGroup
@@ -37,6 +41,7 @@ internal object QQInspectorGeometry {
         val background: Drawable?,
         val backgroundTint: ColorStateList?,
         val imageTint: ColorStateList?,
+        val imageDrawable: Drawable?,
         val text: CharSequence?,
         val textColors: ColorStateList?,
         val textSizePx: Float,
@@ -78,6 +83,7 @@ internal object QQInspectorGeometry {
     private val raisedViews = WeakHashMap<View, Float>()
     private val raisedViewOwners = WeakHashMap<View, List<View>>()
     private val visualPriorities = WeakHashMap<View, Float>()
+    private val appliedPersistentImages = WeakHashMap<ImageView, Drawable>()
     // A bounded strong map keeps rules alive while RecyclerView rows are detached/recycled.
     private val followRules = LinkedHashMap<View, FollowRule>()
 
@@ -104,6 +110,7 @@ internal object QQInspectorGeometry {
             background = view.background,
             backgroundTint = view.backgroundTintList,
             imageTint = (view as? ImageView)?.imageTintList,
+            imageDrawable = (view as? ImageView)?.drawable,
             text = textView?.text?.let(::SpannedString),
             textColors = textView?.textColors,
             textSizePx = textView?.textSize ?: 0f,
@@ -169,6 +176,25 @@ internal object QQInspectorGeometry {
             view.imageTintList != null
         ) {
             result.put("imageTint", view.imageTintList!!.defaultColor)
+        }
+        if (view is ImageView && view.drawable !== original.imageDrawable) {
+            val bitmap = (view.drawable as? BitmapDrawable)?.bitmap
+            if (bitmap != null && bitmap.width > 0 && bitmap.height > 0) {
+                runCatching {
+                    val ratio = minOf(1f, 160f / maxOf(bitmap.width, bitmap.height).toFloat())
+                    val scaled = if (ratio < 1f) Bitmap.createScaledBitmap(
+                        bitmap,
+                        (bitmap.width * ratio).toInt().coerceAtLeast(1),
+                        (bitmap.height * ratio).toInt().coerceAtLeast(1),
+                        true
+                    ) else bitmap
+                    val bytes = java.io.ByteArrayOutputStream()
+                    scaled.compress(Bitmap.CompressFormat.JPEG, 58, bytes)
+                    if (scaled !== bitmap) scaled.recycle()
+                    val encoded = Base64.encodeToString(bytes.toByteArray(), Base64.NO_WRAP)
+                    if (encoded.length <= 48_000) result.put("imageBase64", encoded)
+                }
+            }
         }
         return result.takeIf { it.length() > 0 }
     }
@@ -268,6 +294,21 @@ internal object QQInspectorGeometry {
             if (view.imageTintList?.defaultColor != color) {
                 view.imageTintList = ColorStateList.valueOf(color)
                 anyChanged = true
+            }
+        }
+        if (view is ImageView && state.has("imageBase64")) {
+            val encoded = state.optString("imageBase64")
+            val previouslyApplied = appliedPersistentImages[view]
+            if (encoded.length in 8..48_000 && view.drawable !== previouslyApplied) {
+                runCatching {
+                    val bytes = Base64.decode(encoded, Base64.DEFAULT)
+                    val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    if (bitmap != null) {
+                        view.setImageBitmap(bitmap)
+                        view.drawable?.let { appliedPersistentImages[view] = it }
+                        anyChanged = true
+                    }
+                }
             }
         }
         if (geometryChanged) {
@@ -567,6 +608,17 @@ internal object QQInspectorGeometry {
     }.getOrDefault(false)
 
     @Synchronized
+    fun setImageBitmap(view: View, bitmap: Bitmap): Boolean = runCatching {
+        val target = view as? ImageView ?: return false
+        if (target.parent == null) return false
+        remember(target)
+        target.setImageBitmap(bitmap)
+        target.requestLayout()
+        target.invalidate()
+        true
+    }.getOrDefault(false)
+
+    @Synchronized
     fun applySameClassFollow(view: View): Int {
         val rule = followRules[view] ?: return 0
         // Only explicit editor/geometry actions refresh the profile. Global layout callbacks
@@ -861,7 +913,11 @@ internal object QQInspectorGeometry {
         }
         view.background = saved.background
         view.backgroundTintList = saved.backgroundTint
-        if (view is ImageView) view.imageTintList = saved.imageTint
+        if (view is ImageView) {
+            view.imageTintList = saved.imageTint
+            view.setImageDrawable(saved.imageDrawable)
+            appliedPersistentImages.remove(view)
+        }
         if (view is TextView) {
             if (saved.text != null) view.text = saved.text
             if (saved.textColors != null) view.setTextColor(saved.textColors)
