@@ -1,6 +1,7 @@
 package moe.ono.hooks._core
 
 import moe.ono.config.ConfigManager
+import moe.ono.config.GrabAreaConfig
 import moe.ono.constants.Constants.PrekClickableXXX
 import moe.ono.constants.Constants.PrekXXX
 import moe.ono.hooks._base.ApiHookItem
@@ -15,8 +16,17 @@ class HookItemLoader {
      */
     fun loadHookItem(process: Int) {
         val allHookItems = HookItemFactory.getAllItemList()
+        val grabAreaEnabled = GrabAreaConfig.migrateLegacySettings(allHookItems)
         allHookItems.forEach { hookItem ->
             val path = hookItem.path
+            if (GrabAreaConfig.isGrabAreaPath(path) && !grabAreaEnabled) {
+                when (hookItem) {
+                    is BaseSwitchFunctionHookItem -> hookItem.isEnabled = false
+                    is BaseClickableFunctionHookItem -> hookItem.isEnabled = false
+                }
+                Logger.i("[GrabArea] skipped disabled item: $path")
+                return@forEach
+            }
             if (hookItem is BaseSwitchFunctionHookItem) {
                 hookItem.isEnabled = ConfigManager.getDefaultConfig().getBooleanOrFalse("$PrekXXX${hookItem.path}")
                 if (hookItem.isEnabled && (process and hookItem.targetProcess) != 0) {

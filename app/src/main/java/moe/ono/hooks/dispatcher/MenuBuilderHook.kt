@@ -28,32 +28,117 @@ class MenuBuilderHook : ApiHookItem() {
     )
 
     override fun entry(classLoader: ClassLoader) {
-        val baseClass = classLoader.loadClass("com.tencent.mobileqq.aio.msglist.holder.component.BaseContentComponent")
-        val getMsgMethodName = baseClass.declaredMethods.first {
-            it.returnType == classLoader.loadClass("com.tencent.mobileqq.aio.msg.AIOMsgItem") && it.parameterTypes.isEmpty()
-        }.name
-        val getListMethodName = baseClass.declaredMethods.first {
-            Modifier.isAbstract(it.modifiers) && it.returnType == MutableList::class.java && it.parameterTypes.isEmpty()
-        }.name
-        for (target in decorators.flatMap { it.targetTypes.asIterable() }.toMutableSet()) {
-//            Logger.d("target: $target")
+        // QQ 9.8.5+ changes component implementations across gray releases. Resolve
+        // optional host APIs defensively so a single missing class/signature never
+        // prevents the remaining message-menu decorators from being installed.
+        val baseClass = runCatching {
+            classLoader.loadClass("com.tencent.mobileqq.aio.msglist.holder.component.BaseContentComponent")
+        }.getOrNull()
+        val msgItemClass = runCatching {
+            classLoader.loadClass("com.tencent.mobileqq.aio.msg.AIOMsgItem")
+        }.getOrNull()
+
+        val baseGetMsg = baseClass?.let { findMessageItemGetter(it, msgItemClass) }
+        val baseGetList = baseClass?.let { findNoArgListMethod(it, abstractOnly = true) }
+        val preferredListName = baseGetList?.name
+        val targets = decorators.flatMap { it.targetTypes.asIterable() }.toSet()
+        var hooked = 0
+        var skipped = 0
+
+        targets.forEach { targetName ->
             try {
-                hookAfter(classLoader.loadClass(target).getDeclaredMethod(getListMethodName)) { param ->
-                    val getMsgMethod = baseClass.getDeclaredMethod(getMsgMethodName).apply { isAccessible = true }
-                    val aioMsgItem = getMsgMethod.invoke(param.thisObject)!!
-                    Logger.d(aioMsgItem.toString())
-                    for (decorator in decorators) {
-                        if (target in decorator.targetTypes) {
-                            decorator.onGetMenu(aioMsgItem, target, param)
+                val targetClass = classLoader.loadClass(targetName)
+                val listMethod = findListMethod(targetClass, preferredListName)
+                val messageGetter = baseGetMsg
+                    ?: findMessageItemGetter(targetClass, msgItemClass)
+                    ?: baseClass?.let { findMessageItemGetter(it, msgItemClass) }
+
+                if (listMethod == null || messageGetter == null) {
+                    skipped++
+                    Logger.w("MenuBuilderHook: skip $targetName; compatible menu/message method not found")
+                    return@forEach
+                }
+
+                messageGetter.isAccessible = true
+                listMethod.isAccessible = true
+                hookAfter(listMethod) { param ->
+                    try {
+                        val item = messageGetter.invoke(param.thisObject) ?: return@hookAfter
+                        decorators.forEach { decorator ->
+                            if (targetName in decorator.targetTypes) {
+                                runCatching {
+                                    decorator.onGetMenu(item, targetName, param)
+                                }.onFailure { failure ->
+                                    Logger.e("MenuBuilderHook decorator failed: $targetName / " + decorator.javaClass.simpleName, failure)
+                                }
+                            }
                         }
+                    } catch (failure: Throwable) {
+                        Logger.e("MenuBuilderHook callback failed: $targetName", failure)
                     }
                 }
-            } catch (_: NoSuchMethodException) {
-
-            } catch (_: ClassNotFoundException) {
-
+                hooked++
+            } catch (failure: Throwable) {
+                skipped++
+                Logger.w("MenuBuilderHook: unavailable component $targetName (" + failure.javaClass.simpleName + ")")
             }
+        }
+        Logger.i("MenuBuilderHook: installed $hooked component hooks; skipped $skipped")
+    }
 
+    private fun hierarchyMethods(type: Class<*>): List<java.lang.reflect.Method> {
+        val result = ArrayList<java.lang.reflect.Method>()
+        var current: Class<*>? = type
+        while (current != null && current != Any::class.java) {
+            result.addAll(current.declaredMethods)
+            current = current.superclass
+        }
+        return result
+    }
+
+    private fun findNoArgListMethod(
+        type: Class<*>,
+        abstractOnly: Boolean
+    ): java.lang.reflect.Method? {
+        return hierarchyMethods(type).firstOrNull { method ->
+            method.parameterTypes.isEmpty() &&
+                java.util.List::class.java.isAssignableFrom(method.returnType) &&
+                !Modifier.isStatic(method.modifiers) &&
+                (!abstractOnly || Modifier.isAbstract(method.modifiers))
+        }
+    }
+
+    private fun findListMethod(
+        targetClass: Class<*>,
+        preferredName: String?
+    ): java.lang.reflect.Method? {
+        val methods = hierarchyMethods(targetClass).filter { method ->
+            method.parameterTypes.isEmpty() &&
+                java.util.List::class.java.isAssignableFrom(method.returnType) &&
+                !Modifier.isStatic(method.modifiers) &&
+                !method.isBridge && !method.isSynthetic
+        }
+        if (preferredName != null) {
+            methods.firstOrNull { it.name == preferredName }?.let { return it }
+        }
+        // Fallback only when unambiguous: guessing among multiple zero-arg List
+        // getters can hook an unrelated collection and break QQ's message menu.
+        val distinct = methods.distinctBy { it.name + "#" + it.returnType.name }
+        return distinct.singleOrNull()
+    }
+
+    private fun findMessageItemGetter(
+        type: Class<*>,
+        msgItemClass: Class<*>?
+    ): java.lang.reflect.Method? {
+        return hierarchyMethods(type).firstOrNull { method ->
+            method.parameterTypes.isEmpty() &&
+                !Modifier.isStatic(method.modifiers) &&
+                !method.isBridge && !method.isSynthetic &&
+                (
+                    (msgItemClass != null && method.returnType == msgItemClass) ||
+                        method.returnType.simpleName == "AIOMsgItem"
+                    )
         }
     }
 }

@@ -25,7 +25,7 @@ import java.util.Date
 import java.util.Locale
 
 @HookItem(
-    path = "黑壳区/页面诊断",
+    path = "抓取区/页面诊断",
     description = "查看当前 QQ 页面、宿主版本、进程、屏幕参数、可见控件统计与 WebView 状态；报告仅在本机生成。"
 )
 class QQInspectorPageDiagnostics : BaseClickableFunctionHookItem() {
@@ -97,7 +97,7 @@ internal object QQInspectorDiagnostics {
             .toInt().coerceAtMost(dp(600)).coerceAtLeast(dp(260))
         root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, scrollHeight))
         val dialog = AlertDialog.Builder(activity)
-            .setTitle("黑壳区 · 页面诊断")
+            .setTitle("抓取区 · 页面诊断")
             .setView(root)
             .setPositiveButton("复制诊断报告") { _, _ ->
                 runCatching {
@@ -181,7 +181,7 @@ internal object QQInspectorDiagnostics {
         }
 
         return buildString {
-            appendLine("TNT 黑壳区 · 页面诊断报告")
+            appendLine("TNT 抓取区 · 页面诊断报告")
             appendLine("诊断时间：$now")
             appendLine()
             appendLine("【宿主环境】")

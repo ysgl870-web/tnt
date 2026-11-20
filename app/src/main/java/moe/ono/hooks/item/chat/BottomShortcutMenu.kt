@@ -46,6 +46,8 @@ import moe.ono.util.Initiator
 import moe.ono.util.Logger
 import moe.ono.util.Session
 import moe.ono.util.SyncUtils
+import java.util.Collections
+import java.util.WeakHashMap
 
 @SuppressLint("DiscouragedApi")
 @HookItem(
@@ -66,14 +68,10 @@ class BottomShortcutMenu : BaseClickableFunctionHookItem() {
                 ).ignoreParam().get()
 
                 hookAfter(method) { param: MethodHookParam ->
-                    if (Session.getContact().chatType != ChatTypeConstants.C2C && Session.getContact().chatType != ChatTypeConstants.GROUP) {
-                        return@hookAfter
-                    }
-
-                    val imageView = param.result as ImageView
-
+                    if (!isSupportedChat()) return@hookAfter
+                    val imageView = param.result as? ImageView ?: return@hookAfter
                     if (!this.isEnabled) return@hookAfter
-                    if ("红包".contentEquals(imageView.contentDescription)) {
+                    if (containsLabel(imageView, "红包")) {
                         imageView.setOnLongClickListener { view ->
                             val fixContext = CommonContextWrapper.createAppCompatContext(imageView.context)
                             popMenu(fixContext, view)
@@ -84,45 +82,126 @@ class BottomShortcutMenu : BaseClickableFunctionHookItem() {
             } else {
                 val method = TargetManager.requireMethod(Constants.MethodCacheKey_ChatPanelBtn)
                 hookAfter(method) { param: MethodHookParam? ->
-                    val layout = param!!.thisObject as LinearLayout
-                    if (Session.getContact().chatType != ChatTypeConstants.C2C && Session.getContact().chatType != ChatTypeConstants.GROUP) return@hookAfter
-                    if (!this.isEnabled) return@hookAfter
-                    for (i in 0..<layout.childCount) {
-                        val child = layout.getChildAt(i)
-                        if (child is ImageView && child.contentDescription != null) {
-                            if ("泡泡".contentEquals(child.contentDescription)) {
-                                child.addOnAttachStateChangeListener(object :
-                                    View.OnAttachStateChangeListener {
-                                    private val ONO_TAG = "ono_image_tag"
-                                    override fun onViewAttachedToWindow(v: View) {
-                                        v.post {
-                                            val parent = v.parent as? ViewGroup ?: return@post
-
-                                            if ((0 until parent.childCount).any {
-                                                    parent.getChildAt(it).tag == ONO_TAG
-                                                }) return@post
-
-                                            val onoIcon = ImageView(v.context).apply {
-                                                tag = ONO_TAG
-                                                setOnClickListener { v ->
-                                                    popMenu(CommonContextWrapper.createAppCompatContext(v.context), view = v)
-                                                }
-                                            }
-
-                                            parent.addView(onoIcon, minOf(4, parent.childCount))
-                                        }
-                                    }
-                                    override fun onViewDetachedFromWindow(p0: View) {}
-                                })
-                            }
-                        }
-                    }
+                    val layout = param?.thisObject as? LinearLayout ?: return@hookAfter
+                    if (!isSupportedChat() || !this.isEnabled) return@hookAfter
+                    installBubbleMenu(layout)
                 }
             }
 
             processForInstance()
-        } catch (e: NoSuchMethodException) {
+        } catch (e: Throwable) {
             Logger.e(this.itemName, e)
+        }
+    }
+
+    private fun isSupportedChat(): Boolean = runCatching {
+        val type = Session.getContact().chatType
+        type == ChatTypeConstants.C2C || type == ChatTypeConstants.GROUP
+    }.getOrDefault(false)
+
+    /**
+     * QQ 9.8.5+ may expose "泡泡消息", English labels, or no useful contentDescription.
+     * Prefer a semantic match; if QQ removes all semantics, use a conservative toolbar
+     * fallback that excludes clearly identified actions like红包/语音/图片.
+     */
+    private fun installBubbleMenu(layout: LinearLayout) {
+        if (layout.childCount == 0) return
+        val children = (0 until layout.childCount).mapNotNull { index ->
+            (layout.getChildAt(index) as? ImageView)?.let { index to it }
+        }
+        if (children.isEmpty()) return
+
+        val semanticMatches = children.filter { (_, view) ->
+            val label = viewSemanticLabel(view)
+            label.contains("泡泡") ||
+                label.contains("bubble") ||
+                label.contains("filtervideo") ||
+                label.contains("bubblevideo") ||
+                label.contains("livevideo")
+        }
+        val candidates = if (semanticMatches.isNotEmpty()) {
+            semanticMatches
+        } else {
+            val excluded = listOf(
+                "红包", "redpacket", "red_packet", "语音", "voice", "图片", "image",
+                "相机", "camera", "拍摄", "表情", "emoji", "文件", "file",
+                "更多", "more", "录音", "record", "photo", "album"
+            )
+            children.filter { (_, view) ->
+                val label = viewSemanticLabel(view)
+                label.isNotBlank() && excluded.none { label.contains(it, ignoreCase = true) }
+            }.takeLast(1)
+        }
+
+        candidates.forEach { (_, anchor) -> attachBubbleMenuAnchor(anchor) }
+        if (semanticMatches.isEmpty() && candidates.isNotEmpty()) {
+            Logger.i("BottomShortcutMenu: QQ toolbar bubble label not found; installed conservative fallback")
+        } else if (semanticMatches.isEmpty()) {
+            Logger.w("BottomShortcutMenu: no safe fallback ImageView was found in chat toolbar")
+        }
+    }
+
+    private fun viewSemanticLabel(view: View): String {
+        val description = view.contentDescription?.toString().orEmpty()
+        val tag = view.tag?.toString().orEmpty()
+        val idName = if (view.id != View.NO_ID) {
+            runCatching { view.resources.getResourceEntryName(view.id) }.getOrDefault("")
+        } else ""
+        return listOf(description, tag, idName, view.javaClass.simpleName)
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+            .lowercase(java.util.Locale.ROOT)
+    }
+
+    private fun containsLabel(view: View, label: String): Boolean =
+        viewSemanticLabel(view).contains(label.lowercase(java.util.Locale.ROOT))
+
+    private fun attachBubbleMenuAnchor(anchor: ImageView) {
+        synchronized(trackedBubbleAnchors) {
+            if (!trackedBubbleAnchors.add(anchor)) return
+        }
+        val listener = object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: View) {
+                addBubbleMenuMarker(v)
+            }
+            override fun onViewDetachedFromWindow(v: View) = Unit
+        }
+        anchor.addOnAttachStateChangeListener(listener)
+        if (anchor.isAttachedToWindow) addBubbleMenuMarker(anchor)
+    }
+
+    private fun addBubbleMenuMarker(anchor: View) {
+        anchor.post {
+            if (!anchor.isAttachedToWindow) return@post
+            val parent = anchor.parent as? ViewGroup ?: return@post
+            if ((0 until parent.childCount).any { parent.getChildAt(it).tag == BUBBLE_MENU_MARKER_TAG }) {
+                return@post
+            }
+            val anchorIndex = parent.indexOfChild(anchor)
+            if (anchorIndex < 0) return@post
+            val density = anchor.resources.displayMetrics.density
+            val size = (36f * density).toInt().coerceAtLeast(1)
+            val marker = ImageView(anchor.context).apply {
+                tag = BUBBLE_MENU_MARKER_TAG
+                contentDescription = "TNT 快捷菜单"
+                setImageResource(R.drawable.ic_module_settings)
+                scaleType = ImageView.ScaleType.CENTER_INSIDE
+                setPadding((5f * density).toInt(), (5f * density).toInt(), (5f * density).toInt(), (5f * density).toInt())
+                isClickable = true
+                isFocusable = true
+                setOnClickListener { clicked ->
+                    runCatching {
+                        popMenu(CommonContextWrapper.createAppCompatContext(clicked.context), clicked)
+                    }.onFailure { Logger.e("TNT bubble shortcut menu", it) }
+                }
+            }
+            runCatching {
+                parent.addView(
+                    marker,
+                    (anchorIndex + 1).coerceAtMost(parent.childCount),
+                    ViewGroup.LayoutParams(size, size)
+                )
+            }.onFailure { Logger.e("TNT bubble shortcut marker attach", it) }
         }
     }
 
@@ -414,6 +493,9 @@ class BottomShortcutMenu : BaseClickableFunctionHookItem() {
     }
 
     companion object {
+        private const val BUBBLE_MENU_MARKER_TAG = "tnt_bubble_menu_marker_v2"
+        private val trackedBubbleAnchors: MutableSet<View> =
+            Collections.newSetFromMap(WeakHashMap<View, Boolean>())
         private val instanceForComponent = ArrayList<Any>()
         private val instancesForMainNickNameBlock = ArrayList<Any>()
         private var componentMethodName: String? = null

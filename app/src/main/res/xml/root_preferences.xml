@@ -25,10 +25,10 @@
             app:title="开发者选项" />
 
         <Preference
-            app:key="黑壳区"
+            app:key="抓取区"
             app:icon="@drawable/ic_baseline_developer_mode_24"
-            app:title="黑壳区"
-            app:summary="控件探测、悬浮工具面板、图片与卡片提取、链接记录" />
+            app:title="抓取区"
+            app:summary="控件探测、样式收集、消息/图片/JSON 提取、链接与协议工具" />
 
         <Preference
             app:key="娱乐功能"

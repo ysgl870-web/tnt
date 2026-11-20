@@ -61,7 +61,7 @@ import kotlin.math.min
  * changes click listeners, dispatches clicks, or transmits collected data to a server.
  */
 @HookItem(
-    path = "黑壳区/控件探测器",
+    path = "抓取区/控件探测器",
     description = "在 QQ 页面探测控件、图片、JSON 和链接；控件会以样式快照保存到本地收集库，可查看并将样式模板应用到其他控件。仅采集可见文本控件（排除输入框/密码框）与单控件预览，不上传数据。"
 )
 class QQViewInspector : BaseSwitchFunctionHookItem() {
@@ -89,7 +89,7 @@ class QQViewInspector : BaseSwitchFunctionHookItem() {
 
 /** Black-shell floating panel appearance controls, exposed in QQ settings. */
 @HookItem(
-    path = "黑壳区/悬浮窗外观",
+    path = "抓取区/悬浮窗外观",
     description = "设置悬浮工具面板透明度与背景颜色；面板标题栏可拖动，右下角可调整大小。"
 )
 class QQInspectorPanelAppearance : BaseClickableFunctionHookItem() {
@@ -135,7 +135,7 @@ private object QQInspectorAppearanceDialog {
             override fun onStartTrackingTouch(bar: android.widget.SeekBar?) = Unit
             override fun onStopTrackingTouch(bar: android.widget.SeekBar?) = Unit
         })
-        AlertDialog.Builder(context).setTitle("黑壳区 · 悬浮窗外观")
+        AlertDialog.Builder(context).setTitle("抓取区 · 悬浮窗外观")
             .setMessage("拖动面板标题栏可移动位置，拖动面板底部的调整区域可改变大小。")
             .setView(content)
             .setPositiveButton("保存") { _, _ ->
@@ -146,10 +146,10 @@ private object QQInspectorAppearanceDialog {
 }
 
 /**
- * A one-shot history viewer. Link capture is activated with 黑壳区控件探测器.
+ * A one-shot history viewer. Link capture is activated with 抓取区控件探测器.
  */
 @HookItem(
-    path = "黑壳区/链接记录",
+    path = "抓取区/链接记录",
     description = "按图片直链、卡片 JSON、跳转链接分类查看；相同内容合并并可展开捕获时间与上级页面。"
 )
 class QQInspectorLinkHistory : BaseClickableFunctionHookItem() {
@@ -172,7 +172,7 @@ private object QQInspectorLinkHistoryDialog {
         labels.add("导出全部记录为 JSON")
         labels.add("清空全部记录（${rows.size}）")
         AlertDialog.Builder(context)
-            .setTitle("黑壳区 · 链接记录")
+            .setTitle("抓取区 · 链接记录")
             .setItems(labels.toTypedArray()) { _, which ->
                 when (which) {
                     0, 1, 2 -> showGroups(context, rows.filter { categoryOf(it.optString("kind")) == categories[which] }, categories[which])
@@ -354,7 +354,7 @@ private object QQInspectorRuntime {
     }
 
     private fun isEnabled(): Boolean = runCatching {
-        ConfigManager.getDefaultConfig().getBooleanOrFalse(Constants.PrekXXX + "黑壳区/控件探测器")
+        ConfigManager.getDefaultConfig().getBooleanOrFalse(Constants.PrekXXX + "抓取区/控件探测器")
     }.getOrDefault(false)
 
     fun isPanelOpen(): Boolean = runCatching {
@@ -2989,7 +2989,7 @@ private class InspectorOverlay private constructor(
             }
             QQInspectorRuntime.setPanelOpen(false)
             ConfigManager.getDefaultConfig().edit()
-                .putBoolean(Constants.PrekXXX + "黑壳区/控件探测器", false)
+                .putBoolean(Constants.PrekXXX + "抓取区/控件探测器", false)
                 .apply()
             QQInspectorRuntime.detach(activity)
             showInspectorToast("控件探测器已停用，可在 TNT 设置中重新开启")
@@ -3339,7 +3339,7 @@ internal object QQInspectorLinks {
     private const val MAX_ROWS = 300
     private val lock = Any()
     private val recent = LinkedHashMap<String, Long>()
-    private const val FEATURE_KEY = "黑壳区/控件探测器"
+    private const val FEATURE_KEY = "抓取区/控件探测器"
 
     private fun enabled(): Boolean = runCatching {
         ConfigManager.getDefaultConfig().getBooleanOrFalse(Constants.PrekXXX + FEATURE_KEY)

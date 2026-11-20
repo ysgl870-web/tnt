@@ -21,7 +21,7 @@ import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 
 @HookItem(
-    path = "黑壳区/跳板转换",
+    path = "抓取区/跳板转换",
     description = "解析 QQ Scheme、解包多层 URL/Base64 跳转参数、转换网页 URL 与 Android Intent Scheme，并可确认后打开。"
 )
 class QQInspectorBridgeEntry : BaseClickableFunctionHookItem() {
@@ -106,7 +106,7 @@ internal object QQInspectorBridgeDialog {
         }
         var last: Result? = null
         val dialog = AlertDialog.Builder(context)
-            .setTitle("黑壳区 · 跳板转换")
+            .setTitle("抓取区 · 跳板转换")
             .setView(contentScroll)
             .setNegativeButton("关闭", null)
             .create()

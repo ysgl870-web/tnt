@@ -26,6 +26,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import moe.ono.BuildConfig
 import moe.ono.R
 import moe.ono.config.ConfigManager
+import moe.ono.config.GrabAreaConfig
 import moe.ono.config.SettingItem
 import moe.ono.config.getDynamicClickableSettings
 import moe.ono.config.getDynamicSwitchSettings
@@ -355,13 +356,26 @@ open class OUOSettingActivity : BaseActivity() {
             val screen = preferenceManager.createPreferenceScreen(requireContext())
             preferenceScreen = screen
 
+            val config = ConfigManager.getDefaultConfig()
+            val allSwitchSettings = getDynamicSwitchSettings()
+            val allClickableSettings = getDynamicClickableSettings()
+            GrabAreaConfig.migrateLegacySettings(
+                (allSwitchSettings + allClickableSettings).map { it.clazz }.distinctBy { it.path }
+            )
+            val grabAreaEnabled = config.getBooleanOrFalse(GrabAreaConfig.MASTER_KEY)
+            val grabAreaGroups = ArrayList<PreferenceCategory>()
+
             fun addSwitch(settingItem: SettingItem, target: PreferenceCategory? = null) {
                 val preference = MaterialSwitchPreference(requireContext()).apply {
                     key = settingItem.key
                     title = settingItem.title
                     summary = settingItem.summary
                     icon = settingItem.iconResId?.let { requireContext().getDrawable(it) }
-                    isChecked = settingItem.isSwitch
+                    // Read the persisted value so temporarily disabling the master switch
+                    // never erases or visually loses each feature's own preference.
+                    isChecked = if (settingItem.t == GrabAreaConfig.CATEGORY) {
+                        config.getBooleanOrFalse("$PrekXXX${settingItem.path}")
+                    } else settingItem.isSwitch
                     isPersistent = false
                     setOnPreferenceClickListener {
                         handleItemClick(settingItem, isChecked)
@@ -386,30 +400,59 @@ open class OUOSettingActivity : BaseActivity() {
                 (target ?: screen).addPreference(preference)
             }
 
-            val switches = getDynamicSwitchSettings().filter { it.t == t }
-            val actions = getDynamicClickableSettings().filter { it.t == t }
+            val switches = allSwitchSettings.filter { it.t == t }
+            val actions = allClickableSettings.filter { it.t == t }
 
-            if (t == "黑壳区") {
-                // QEdge-inspired functional center: concise groups, clear hierarchy and
-                // no giant flat list. Keep the actual ONO preference widgets and hook state.
+            if (t == GrabAreaConfig.CATEGORY) {
+                val masterGroup = PreferenceCategory(requireContext()).apply {
+                    title = "抓取区总开关"
+                    summary = "集中启用或停用本区功能；修改后重启 QQ 生效"
+                }
+                screen.addPreference(masterGroup)
+                val masterSwitch = MaterialSwitchPreference(requireContext()).apply {
+                    key = GrabAreaConfig.MASTER_KEY
+                    title = "开启抓取区"
+                    summary = "关闭后抓取区 hooks 不会在 QQ 启动时加载；单项开关状态会保留"
+                    isChecked = grabAreaEnabled
+                    isPersistent = false
+                    setOnPreferenceClickListener {
+                        val enabledNow = isChecked
+                        config.edit().putBoolean(GrabAreaConfig.MASTER_KEY, enabledNow).apply()
+                        grabAreaGroups.forEach { it.isEnabled = enabledNow }
+                        Toasts.info(
+                            requireContext(),
+                            if (enabledNow) "抓取区已开启，重启 QQ 后生效" else "抓取区已停用，重启 QQ 后生效"
+                        )
+                        true
+                    }
+                }
+                masterGroup.addPreference(masterSwitch)
+
                 val controlGroup = PreferenceCategory(requireContext()).apply {
-                    title = "控件探测与悬浮窗"
-                    summary = "控件扫描、选择、隐藏、恢复及悬浮操作面板"
+                    title = "控件探测与样式"
+                    summary = "控件扫描、收集库、样式替换、悬浮窗外观和位置控制"
                 }
                 val messageGroup = PreferenceCategory(requireContext()).apply {
-                    title = "消息与卡片提取"
-                    summary = "图片直链、Ark JSON、消息内容提取"
+                    title = "消息与卡片抓取"
+                    summary = "QQ 消息内容、图片、Ark JSON 与提取记录"
                 }
-                val recordGroup = PreferenceCategory(requireContext()).apply {
-                    title = "链接与提取记录"
-                    summary = "分类链接历史、上级页面与消息提取记录"
+                val linkGroup = PreferenceCategory(requireContext()).apply {
+                    title = "链接与协议工具"
+                    summary = "图片直链、链接分类记录、Scheme / URL 跳板转换"
                 }
-                screen.addPreference(controlGroup)
-                screen.addPreference(messageGroup)
-                screen.addPreference(recordGroup)
+                val diagnosticsGroup = PreferenceCategory(requireContext()).apply {
+                    title = "页面诊断"
+                    summary = "当前 Activity、WebView、控件树与宿主环境信息"
+                }
+                listOf(controlGroup, messageGroup, linkGroup, diagnosticsGroup).forEach {
+                    it.isEnabled = grabAreaEnabled
+                    grabAreaGroups.add(it)
+                    screen.addPreference(it)
+                }
 
                 fun groupFor(path: String): PreferenceCategory = when {
-                    path.contains("记录") || path.contains("链接") || path.contains("历史") -> recordGroup
+                    path.contains("页面诊断") -> diagnosticsGroup
+                    path.contains("记录") || path.contains("链接") || path.contains("跳板") -> linkGroup
                     path.contains("消息") || path.contains("卡片") || path.contains("提取") -> messageGroup
                     else -> controlGroup
                 }

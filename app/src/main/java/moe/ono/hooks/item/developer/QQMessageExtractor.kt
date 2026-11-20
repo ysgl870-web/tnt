@@ -38,7 +38,7 @@ import java.util.concurrent.Executors
  */
 @SuppressLint("DiscouragedApi")
 @HookItem(
-    path = "黑壳区/QQ消息信息提取",
+    path = "抓取区/QQ消息信息提取",
     description = "自动提取消息里的图片直链、Ark 卡片 JSON、正文链接与消息文本。开启后长按任意消息点「提取」可查看单条；在「查看消息提取记录」里查看最近 30 条。"
 )
 class QQMessageExtractor : BaseSwitchFunctionHookItem(), OnMenuBuilder,
@@ -157,7 +157,7 @@ class QQMessageExtractor : BaseSwitchFunctionHookItem(), OnMenuBuilder,
  * 设置页入口：查看最近提取的消息。
  */
 @HookItem(
-    path = "黑壳区/消息提取记录",
+    path = "抓取区/消息提取记录",
     description = "查看本机最近 30 条消息提取结果，可复制单条、全部图片直链，或导出 JSON。需先开启「QQ消息信息提取」。"
 )
 class QQMessageExtractHistory : BaseClickableFunctionHookItem() {
