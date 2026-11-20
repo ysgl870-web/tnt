@@ -299,7 +299,9 @@ internal object QQInspectorGeometry {
         if (view is ImageView && state.has("imageBase64")) {
             val encoded = state.optString("imageBase64")
             val previouslyApplied = appliedPersistentImages[view]
-            if (encoded.length in 8..48_000 && view.drawable !== previouslyApplied) {
+            if (encoded.length in 8..48_000 &&
+                (previouslyApplied == null || view.drawable !== previouslyApplied)
+            ) {
                 runCatching {
                     val bytes = Base64.decode(encoded, Base64.DEFAULT)
                     val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
