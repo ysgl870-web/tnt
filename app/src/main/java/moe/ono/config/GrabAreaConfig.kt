@@ -9,7 +9,8 @@ import moe.ono.hooks._base.BaseSwitchFunctionHookItem
 /**
  * One master gate for TNT's grab-area hooks.
  *
- * Legacy "黑壳区/*" settings are migrated to "抓取区/*" once. Per-feature preferences
+ * Legacy settings under the "黑壳区" category are migrated to "抓取区" once.
+ * Per-feature preferences
  * remain stored even when the master switch is off, so users can temporarily disable
  * the whole section without losing their individual choices.
  */
