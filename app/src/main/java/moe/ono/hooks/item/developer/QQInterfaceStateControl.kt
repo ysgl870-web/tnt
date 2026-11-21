@@ -104,10 +104,28 @@ private object InterfaceStateRuntime {
         if (activity != null) apply(activity)
     }
 
+    fun disableAndRestore(context: Context) {
+        ConfigManager.getDefaultConfig().edit().putBoolean(ENABLED, false).apply()
+        val activity = context as? Activity ?: ContextUtils.getCurrentActivity()
+        if (activity != null) restore(activity)
+    }
+
+    private fun restore(activity: Activity) {
+        val original = synchronized(originals) { originals.remove(activity) } ?: return
+        runCatching {
+            activity.window.statusBarColor = original.statusColor
+            activity.window.navigationBarColor = original.navigationColor
+            activity.window.decorView.systemUiVisibility = original.uiFlags
+        }
+    }
+
     fun apply(activity: Activity) {
         if (activity.isFinishing || activity.isDestroyed) return
         val cfg = ConfigManager.getDefaultConfig()
-        if (!cfg.getBooleanOrFalse(ENABLED)) return
+        if (!cfg.getBooleanOrFalse(ENABLED)) {
+            restore(activity)
+            return
+        }
         val window = activity.window ?: return
         val original = synchronized(originals) {
             originals.getOrPut(activity) {
@@ -169,8 +187,8 @@ private object InterfaceStateDialog {
         var bottomMode = cfg.getIntOrDefault("tnt_interface_bottom_mode", 2).coerceIn(0, 2)
         var topColor = cfg.getIntOrDefault("tnt_interface_top_color", 0x182740)
         var bottomColor = cfg.getIntOrDefault("tnt_interface_bottom_color", 0x182740)
-        val topAlpha = cfg.getIntOrDefault("tnt_interface_top_alpha", 86).coerceIn(0, 100)
-        val bottomAlpha = cfg.getIntOrDefault("tnt_interface_bottom_alpha", 86).coerceIn(0, 100)
+        var topAlpha = cfg.getIntOrDefault("tnt_interface_top_alpha", 86).coerceIn(0, 100)
+        var bottomAlpha = cfg.getIntOrDefault("tnt_interface_bottom_alpha", 86).coerceIn(0, 100)
         val floatAlpha = cfg.getIntOrDefault("tnt_interface_float_alpha", 94).coerceIn(35, 100)
         val floatColor = cfg.getIntOrDefault("tnt_interface_float_color", 0x182740)
 
@@ -218,9 +236,9 @@ private object InterfaceStateDialog {
         }
 
         modeRow("顶栏状态", topMode) { topMode = it }
-        alphaControl("顶栏透明度", topAlpha, 0, 100) {}
+        alphaControl("顶栏透明度", topAlpha, 0, 100) { topAlpha = it }
         modeRow("底栏状态", bottomMode) { bottomMode = it }
-        alphaControl("底栏透明度", bottomAlpha, 0, 100) {}
+        alphaControl("底栏透明度", bottomAlpha, 0, 100) { bottomAlpha = it }
         heading("悬浮面板同步透明度")
         var currentFloatAlpha = floatAlpha
         val floatLabel = root.getChildAt(root.childCount - 1) as TextView
