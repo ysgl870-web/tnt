@@ -18,6 +18,7 @@ import moe.ono.config.ConfigManager
 import moe.ono.hooks._base.BaseClickableFunctionHookItem
 import moe.ono.hooks._core.annotation.HookItem
 import moe.ono.util.ContextUtils
+import moe.ono.util.SyncUtils
 import java.util.WeakHashMap
 
 /**
@@ -33,6 +34,8 @@ import java.util.WeakHashMap
     description = "控制 QQ 顶栏、底栏颜色与透明度，并同步设置控件探测悬浮面板外观。"
 )
 class QQInterfaceStateControl : BaseClickableFunctionHookItem() {
+    override fun targetProcess(): Int = SyncUtils.PROC_MAIN
+    override fun alwaysRun(): Boolean = true
     override fun entry(classLoader: ClassLoader) = InterfaceStateRuntime.install()
 
     override fun onClick(context: Context) {
