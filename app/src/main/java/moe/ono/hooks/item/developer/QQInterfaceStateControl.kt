@@ -274,18 +274,8 @@ private object InterfaceStateDialog {
                 Toast.makeText(context, "界面状态已保存并应用；其他页面切换后自动同步", Toast.LENGTH_SHORT).show()
             }
             .setNeutralButton("恢复系统默认") { _, _ ->
-                cfg.edit().putBoolean("tnt_interface_state_enabled", false).apply()
-                val activity = context as? Activity ?: ContextUtils.getCurrentActivity()
-                if (activity != null) {
-                    val window = activity.window
-                    val top = window.statusBarColor
-                    val bottom = window.navigationBarColor
-                    window.statusBarColor = Color.BLACK
-                    window.navigationBarColor = Color.BLACK
-                    window.decorView.systemUiVisibility = window.decorView.systemUiVisibility and
-                        (View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION).inv()
-                    Toast.makeText(context, "已关闭 TNT 界面覆盖；重新进入页面后由 QQ 自行管理系统栏", Toast.LENGTH_SHORT).show()
-                }
+                InterfaceStateRuntime.disableAndRestore(context)
+                Toast.makeText(context, "已恢复当前页面原始系统栏状态", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("取消", null)
             .show()
