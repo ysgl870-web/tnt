@@ -5,9 +5,11 @@ import android.content.Context
 import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
+import android.view.Gravity
 import android.widget.ArrayAdapter
 import android.widget.AutoCompleteTextView
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -61,16 +63,18 @@ class BottomShortcutMenu : BaseClickableFunctionHookItem() {
     )
 
     private fun hook() {
-        try {
-            if (ConfigManager.dGetInt(Constants.PrekCfgXXX + "bottom_shortcut_menu_mode", 0) == 1) {
-                val method = XMethod.clz(Constants.CLAZZ_PANEL_ICON_LINEAR_LAYOUT).ret(
-                    ImageView::class.java
-                ).ignoreParam().get()
+        val mode = ConfigManager.dGetInt(Constants.PrekCfgXXX + "bottom_shortcut_menu_mode", 0)
+        if (mode == 1) {
+            // Red-packet mode remains unchanged.
+            try {
+                val method = XMethod.clz(Constants.CLAZZ_PANEL_ICON_LINEAR_LAYOUT)
+                    .ret(ImageView::class.java)
+                    .ignoreParam()
+                    .get()
 
                 hookAfter(method) { param: MethodHookParam ->
-                    if (!isSupportedChat()) return@hookAfter
+                    if (!isSupportedChat() || !this.isEnabled) return@hookAfter
                     val imageView = param.result as? ImageView ?: return@hookAfter
-                    if (!this.isEnabled) return@hookAfter
                     if (containsLabel(imageView, "红包")) {
                         imageView.setOnLongClickListener { view ->
                             val fixContext = CommonContextWrapper.createAppCompatContext(imageView.context)
@@ -79,18 +83,84 @@ class BottomShortcutMenu : BaseClickableFunctionHookItem() {
                         }
                     }
                 }
-            } else {
-                val method = TargetManager.requireMethod(Constants.MethodCacheKey_ChatPanelBtn)
-                hookAfter(method) { param: MethodHookParam? ->
-                    val layout = param?.thisObject as? LinearLayout ?: return@hookAfter
-                    if (!isSupportedChat() || !this.isEnabled) return@hookAfter
-                    installBubbleMenu(layout)
+            } catch (e: Throwable) {
+                Logger.e("BottomShortcutMenu red-packet hook", e)
+            }
+        } else {
+            hookBubbleMessageMode()
+        }
+
+        // The nickname/avatar hooks are independent from the shortcut-bar hook.
+        runCatching { processForInstance() }
+            .onFailure { Logger.e("BottomShortcutMenu processForInstance", it) }
+    }
+
+    /**
+     * QQ 9.3.85 uses PanelIconLinearLayout -> RedTouch -> ImageView.
+     * Keep the legacy method when it exists, and also observe the QQNT shortcut bar.
+     */
+    private fun hookBubbleMessageMode() {
+        // Legacy route for older QQ layouts.
+        runCatching {
+            val method = TargetManager.requireMethod(Constants.MethodCacheKey_ChatPanelBtn)
+            if (method != null) {
+                hookAfter(method) { param: MethodHookParam ->
+                    if (!this.isEnabled || !isSupportedChat()) return@hookAfter
+                    val root = param.thisObject as? ViewGroup ?: return@hookAfter
+                    installBubbleMenu(root)
                 }
             }
+        }.onFailure {
+            Logger.w("BottomShortcutMenu: legacy ChatPanelBtn hook unavailable; using QQNT shortcut bar")
+        }
 
-            processForInstance()
-        } catch (e: Throwable) {
-            Logger.e(this.itemName, e)
+        // The method used by the red-packet mode also gives us a stable QQNT entry point.
+        runCatching {
+            val method = XMethod.clz(Constants.CLAZZ_PANEL_ICON_LINEAR_LAYOUT)
+                .ret(ImageView::class.java)
+                .ignoreParam()
+                .get()
+
+            hookAfter(method) { param: MethodHookParam ->
+                if (!this.isEnabled || !isSupportedChat()) return@hookAfter
+                val panel = (param.thisObject as? View)?.let { findPanelIconRoot(it) }
+                    ?: (param.result as? View)?.let { findPanelIconRoot(it) }
+                if (panel != null) {
+                    panel.post {
+                        if (this.isEnabled && isSupportedChat()) installBubbleMenu(panel)
+                    }
+                }
+            }
+        }.onFailure {
+            Logger.w("BottomShortcutMenu: QQNT PanelIconLinearLayout image method was not found")
+        }
+
+        // Catch children added after hook initialization (including RedTouch wrappers).
+        runCatching {
+            val onViewAdded = ViewGroup::class.java
+                .getDeclaredMethod("onViewAdded", View::class.java)
+                .apply { isAccessible = true }
+
+            hookAfter(onViewAdded) { param: MethodHookParam ->
+                val parent = param.thisObject as? ViewGroup ?: return@hookAfter
+                val name = parent.javaClass.name
+                if (name != Constants.CLAZZ_PANEL_ICON_LINEAR_LAYOUT && name != RED_TOUCH_CLASS) {
+                    return@hookAfter
+                }
+                if (!this.isEnabled || !isSupportedChat()) return@hookAfter
+
+                val panel = if (name == Constants.CLAZZ_PANEL_ICON_LINEAR_LAYOUT) {
+                    parent
+                } else {
+                    findPanelIconRoot(parent)
+                } ?: return@hookAfter
+
+                panel.post {
+                    if (this.isEnabled && isSupportedChat()) installBubbleMenu(panel)
+                }
+            }
+        }.onFailure {
+            Logger.e("BottomShortcutMenu: QQNT ViewGroup child observer failed", it)
         }
     }
 
@@ -104,14 +174,19 @@ class BottomShortcutMenu : BaseClickableFunctionHookItem() {
      * Prefer a semantic match; if QQ removes all semantics, use a conservative toolbar
      * fallback that excludes clearly identified actions like红包/语音/图片.
      */
-    private fun installBubbleMenu(layout: LinearLayout) {
-        if (layout.childCount == 0) return
-        val children = (0 until layout.childCount).mapNotNull { index ->
-            (layout.getChildAt(index) as? ImageView)?.let { index to it }
+    /**
+     * Scan the real QQNT shortcut-bar subtree. In 9.3.85 the bubble action is
+     * an ImageView nested inside the first RedTouch wrapper (toolbar child #4).
+     */
+    private fun installBubbleMenu(root: ViewGroup) {
+        val panel = if (root.javaClass.name == Constants.CLAZZ_PANEL_ICON_LINEAR_LAYOUT) {
+            root
+        } else {
+            findPanelIconRoot(root) ?: root
         }
-        if (children.isEmpty()) return
 
-        val semanticMatches = children.filter { (_, view) ->
+        val images = collectImageViews(panel)
+        val semanticMatches = images.filter { view ->
             val label = viewSemanticLabel(view)
             label.contains("泡泡") ||
                 label.contains("bubble") ||
@@ -119,26 +194,80 @@ class BottomShortcutMenu : BaseClickableFunctionHookItem() {
                 label.contains("bubblevideo") ||
                 label.contains("livevideo")
         }
+
+        // Do not guess among every ImageView. Use the exact container signature
+        // observed on QQ 9.3.85 only when no semantic label is exposed.
         val candidates = if (semanticMatches.isNotEmpty()) {
             semanticMatches
         } else {
-            val excluded = listOf(
-                "红包", "redpacket", "red_packet", "语音", "voice", "图片", "image",
-                "相机", "camera", "拍摄", "表情", "emoji", "文件", "file",
-                "更多", "more", "录音", "record", "photo", "album"
+            listOfNotNull(
+                if (panel.javaClass.name == Constants.CLAZZ_PANEL_ICON_LINEAR_LAYOUT) {
+                    findQQ935BubbleAnchor(panel)
+                } else {
+                    null
+                }
             )
-            children.filter { (_, view) ->
-                val label = viewSemanticLabel(view)
-                label.isNotBlank() && excluded.none { label.contains(it, ignoreCase = true) }
-            }.takeLast(1)
         }
 
-        candidates.forEach { (_, anchor) -> attachBubbleMenuAnchor(anchor) }
-        if (semanticMatches.isEmpty() && candidates.isNotEmpty()) {
-            Logger.i("BottomShortcutMenu: QQ toolbar bubble label not found; installed conservative fallback")
-        } else if (semanticMatches.isEmpty()) {
-            Logger.w("BottomShortcutMenu: no safe fallback ImageView was found in chat toolbar")
+        candidates.distinct().forEach { attachBubbleMenuAnchor(it) }
+        if (candidates.isEmpty()) {
+            Logger.w(
+                "BottomShortcutMenu: bubble anchor not identified; " +
+                    "panelClass=${panel.javaClass.name}, childCount=${panel.childCount}"
+            )
         }
+    }
+
+    private fun collectImageViews(root: View): List<ImageView> {
+        val result = ArrayList<ImageView>()
+        var visited = 0
+
+        fun visit(view: View, depth: Int) {
+            if (visited++ >= 160 || depth > 8 || result.size >= 48) return
+            if (view is ImageView && view.tag != BUBBLE_MENU_MARKER_TAG) {
+                result.add(view)
+            }
+            if (view is ViewGroup) {
+                for (index in 0 until view.childCount) {
+                    visit(view.getChildAt(index), depth + 1)
+                }
+            }
+        }
+
+        visit(root, 0)
+        return result
+    }
+
+    private fun findQQ935BubbleAnchor(panel: ViewGroup): ImageView? {
+        // Device report: six direct slots; child 3 is RedTouch at x=540..720,
+        // with one ImageView child. This avoids selecting the neighboring actions.
+        if (panel.childCount < 6) return null
+        val bubbleSlot = panel.getChildAt(3) as? ViewGroup ?: return null
+        if (bubbleSlot.javaClass.name != RED_TOUCH_CLASS) return null
+        return collectImageViews(bubbleSlot).singleOrNull()
+    }
+
+    private fun findPanelIconRoot(view: View): ViewGroup? {
+        var current: View? = view
+        while (current != null) {
+            if (current is ViewGroup &&
+                current.javaClass.name == Constants.CLAZZ_PANEL_ICON_LINEAR_LAYOUT
+            ) {
+                return current
+            }
+            current = current.parent as? View
+        }
+        return null
+    }
+
+    private fun findDirectChildUnder(root: ViewGroup, descendant: View): View? {
+        var current = descendant
+        var parent = current.parent as? View
+        while (parent != null && parent !== root) {
+            current = parent
+            parent = current.parent as? View
+        }
+        return current.takeIf { parent === root }
     }
 
     private fun viewSemanticLabel(view: View): String {
@@ -173,20 +302,35 @@ class BottomShortcutMenu : BaseClickableFunctionHookItem() {
     private fun addBubbleMenuMarker(anchor: View) {
         anchor.post {
             if (!anchor.isAttachedToWindow) return@post
-            val parent = anchor.parent as? ViewGroup ?: return@post
-            if ((0 until parent.childCount).any { parent.getChildAt(it).tag == BUBBLE_MENU_MARKER_TAG }) {
-                return@post
+
+            val panel = findPanelIconRoot(anchor)
+            val anchorParent = anchor.parent as? ViewGroup ?: return@post
+
+            // RedTouch is a frame-style wrapper on QQ 9.3.85. Prefer a small
+            // in-slot overlay so the six toolbar cells do not get pushed off-screen.
+            val overlayParent = anchorParent.takeIf {
+                it.javaClass.name == RED_TOUCH_CLASS && it is FrameLayout
             }
-            val anchorIndex = parent.indexOfChild(anchor)
-            if (anchorIndex < 0) return@post
+
+            val insertionParent = overlayParent ?: panel ?: anchorParent
+            if ((0 until insertionParent.childCount).any {
+                    insertionParent.getChildAt(it).tag == BUBBLE_MENU_MARKER_TAG
+                }
+            ) return@post
+
             val density = anchor.resources.displayMetrics.density
-            val size = (36f * density).toInt().coerceAtLeast(1)
+            val markerSize = (18f * density).toInt().coerceAtLeast(1)
             val marker = ImageView(anchor.context).apply {
                 tag = BUBBLE_MENU_MARKER_TAG
                 contentDescription = "TNT 快捷菜单"
                 setImageResource(R.drawable.ic_module_settings)
                 scaleType = ImageView.ScaleType.CENTER_INSIDE
-                setPadding((5f * density).toInt(), (5f * density).toInt(), (5f * density).toInt(), (5f * density).toInt())
+                setPadding(
+                    (2f * density).toInt(),
+                    (2f * density).toInt(),
+                    (2f * density).toInt(),
+                    (2f * density).toInt()
+                )
                 isClickable = true
                 isFocusable = true
                 setOnClickListener { clicked ->
@@ -195,13 +339,40 @@ class BottomShortcutMenu : BaseClickableFunctionHookItem() {
                     }.onFailure { Logger.e("TNT bubble shortcut menu", it) }
                 }
             }
+
             runCatching {
-                parent.addView(
-                    marker,
-                    (anchorIndex + 1).coerceAtMost(parent.childCount),
-                    ViewGroup.LayoutParams(size, size)
-                )
-            }.onFailure { Logger.e("TNT bubble shortcut marker attach", it) }
+                when {
+                    overlayParent != null -> {
+                        val params = FrameLayout.LayoutParams(
+                            markerSize,
+                            markerSize,
+                            Gravity.END or Gravity.CENTER_VERTICAL
+                        ).apply {
+                            marginEnd = (2f * density).toInt()
+                        }
+                        overlayParent.addView(marker, params)
+                    }
+                    panel != null -> {
+                        val slot = findDirectChildUnder(panel, anchor) ?: return@runCatching
+                        val index = panel.indexOfChild(slot)
+                        if (index < 0) return@runCatching
+                        panel.addView(
+                            marker,
+                            (index + 1).coerceAtMost(panel.childCount),
+                            ViewGroup.LayoutParams(markerSize, markerSize)
+                        )
+                    }
+                    else -> {
+                        val index = insertionParent.indexOfChild(anchor)
+                        if (index < 0) return@runCatching
+                        insertionParent.addView(
+                            marker,
+                            (index + 1).coerceAtMost(insertionParent.childCount),
+                            ViewGroup.LayoutParams(markerSize, markerSize)
+                        )
+                    }
+                }
+            }.onFailure { Logger.e("BottomShortcutMenu bubble marker attach", it) }
         }
     }
 
@@ -494,6 +665,7 @@ class BottomShortcutMenu : BaseClickableFunctionHookItem() {
 
     companion object {
         private const val BUBBLE_MENU_MARKER_TAG = "tnt_bubble_menu_marker_v2"
+        private const val RED_TOUCH_CLASS = "com.tencent.mobileqq.tianshu.ui.RedTouch"
         private val trackedBubbleAnchors: MutableSet<View> =
             Collections.newSetFromMap(WeakHashMap<View, Boolean>())
         private val instanceForComponent = ArrayList<Any>()
