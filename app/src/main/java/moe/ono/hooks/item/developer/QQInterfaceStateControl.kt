@@ -40,7 +40,7 @@ class QQInterfaceStateControl : BaseClickableFunctionHookItem() {
 
     override fun onClick(context: Context) {
         InterfaceStateRuntime.install()
-        InterfaceStateDialog.show(context)
+        QQInterfaceStateDialog.show(context)
     }
 }
 
@@ -185,7 +185,7 @@ private object InterfaceStateRuntime {
         Color.argb((alpha * 255 / 100).coerceIn(0, 255), Color.red(rgb), Color.green(rgb), Color.blue(rgb))
 }
 
-private object InterfaceStateDialog {
+internal object QQInterfaceStateDialog {
     private val colors = listOf(
         "深海蓝" to 0x182740, "曜石黑" to 0x1B1D22, "星空紫" to 0x251D3A,
         "翡翠绿" to 0x15302B, "雾面白" to 0xF4F7FB
