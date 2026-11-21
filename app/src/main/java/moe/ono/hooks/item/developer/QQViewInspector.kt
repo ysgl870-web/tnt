@@ -1556,6 +1556,11 @@ private class InspectorOverlay private constructor(
             "⇄  Scheme / URL 跳板" to { QQInspectorBridgeDialog.show(activity) },
             colors = intArrayOf(0xFF7357D8.toInt(), 0xFF236DBB.toInt()))
 
+        addSection("INTERFACE STATE  /  界面状态", "顶栏、底栏颜色透明度与悬浮面板同步")
+        addRow("▤  顶栏 / 底栏控制" to { QQInterfaceStateDialog.show(activity) },
+            "◉  悬浮窗外观" to { QQInspectorAppearanceDialog.show(activity) },
+            colors = intArrayOf(0xFF087F9F.toInt(), 0xFF365FA8.toInt()))
+
         if (positionEditTarget != null) {
             addSection("POSITION CONTROL  /  精细位置控制", "控件内部拖动移动；四角锚点拖动调整宽高")
             toolbar.addView(TextView(activity).apply {
