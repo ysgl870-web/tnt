@@ -12,6 +12,7 @@ import android.view.Window
 import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.SeekBar
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import moe.ono.config.ConfigManager
@@ -58,7 +59,9 @@ private object InterfaceStateRuntime {
     private data class Original(
         val statusColor: Int,
         val navigationColor: Int,
-        val uiFlags: Int
+        val uiFlags: Int,
+        val windowFlags: Int,
+        val dividerColor: Int
     )
     private val originals = WeakHashMap<Activity, Original>()
     @Volatile private var installed = false
@@ -122,6 +125,8 @@ private object InterfaceStateRuntime {
             activity.window.statusBarColor = original.statusColor
             activity.window.navigationBarColor = original.navigationColor
             activity.window.decorView.systemUiVisibility = original.uiFlags
+            activity.window.attributes = activity.window.attributes.apply { flags = original.windowFlags }
+            if (Build.VERSION.SDK_INT >= 28) activity.window.navigationBarDividerColor = original.dividerColor
         }
     }
 
@@ -135,7 +140,7 @@ private object InterfaceStateRuntime {
         val window = activity.window ?: return
         val original = synchronized(originals) {
             originals.getOrPut(activity) {
-                Original(window.statusBarColor, window.navigationBarColor, window.decorView.systemUiVisibility)
+                Original(window.statusBarColor, window.navigationBarColor, window.decorView.systemUiVisibility, window.attributes.flags, if (Build.VERSION.SDK_INT >= 28) window.navigationBarDividerColor else Color.TRANSPARENT)
             }
         }
         val topMode = cfg.getIntOrDefault(TOP_MODE, 0)
@@ -294,7 +299,7 @@ internal object QQInterfaceStateDialog {
         AlertDialog.Builder(context)
             .setTitle("抓取区 · 界面状态控制")
             .setMessage("颜色/半透明模式按透明度绘制系统栏；完全透明模式会让 QQ 内容延伸到系统栏后方。若页面布局不适配，改回“跟随页面”。")
-            .setView(root)
+            .setView(ScrollView(context).apply { addView(root) })
             .setPositiveButton("保存并应用") { _, _ ->
                 InterfaceStateRuntime.saveAndApply(
                     context, topMode, bottomMode, topColor, bottomColor,
