@@ -35,7 +35,10 @@ import java.util.WeakHashMap
 class QQInterfaceStateControl : BaseClickableFunctionHookItem() {
     override fun entry(classLoader: ClassLoader) = InterfaceStateRuntime.install()
 
-    override fun onClick(context: Context) = InterfaceStateDialog.show(context)
+    override fun onClick(context: Context) {
+        InterfaceStateRuntime.install()
+        InterfaceStateDialog.show(context)
+    }
 }
 
 private object InterfaceStateRuntime {
@@ -135,32 +138,36 @@ private object InterfaceStateRuntime {
         val topMode = cfg.getIntOrDefault(TOP_MODE, 0)
         val bottomMode = cfg.getIntOrDefault(BOTTOM_MODE, 0)
         val flags = window.decorView.systemUiVisibility
-        var nextFlags = flags and (View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
-            View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE).inv()
+        val fullScreen = View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+        val hideNavigation = View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+        val stable = View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+        val managedLayoutFlags = fullScreen or hideNavigation or stable
+        var nextFlags = flags and managedLayoutFlags.inv()
 
         if (topMode == 0) {
             window.statusBarColor = original.statusColor
+            nextFlags = nextFlags or (original.uiFlags and fullScreen)
         } else {
             val alpha = if (topMode == 2) 0 else cfg.getIntOrDefault(TOP_ALPHA, 100).coerceIn(0, 100)
             window.statusBarColor = withAlpha(cfg.getIntOrDefault(TOP_COLOR, 0x182740), alpha)
-            if (topMode == 2) nextFlags = nextFlags or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+            if (topMode == 2) nextFlags = nextFlags or fullScreen
         }
 
         if (bottomMode == 0) {
             window.navigationBarColor = original.navigationColor
+            nextFlags = nextFlags or (original.uiFlags and hideNavigation)
         } else {
             val alpha = if (bottomMode == 2) 0 else cfg.getIntOrDefault(BOTTOM_ALPHA, 100).coerceIn(0, 100)
             window.navigationBarColor = withAlpha(cfg.getIntOrDefault(BOTTOM_COLOR, 0x182740), alpha)
-            if (bottomMode == 2) nextFlags = nextFlags or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+            if (bottomMode == 2) nextFlags = nextFlags or hideNavigation
         }
 
-        // Preserve all unrelated QQ UI flags; only replace the layout bits managed here.
-        if (topMode == 0 && bottomMode == 0) {
-            nextFlags = (nextFlags and (View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
-                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE).inv()) or
-                (original.uiFlags and (View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
-                    View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE))
+        if (topMode == 2 || bottomMode == 2) {
+            nextFlags = nextFlags or stable
+        } else {
+            nextFlags = nextFlags or (original.uiFlags and stable)
         }
+        // Preserve unrelated QQ flags and restore layout flags independently per system bar.
         window.decorView.systemUiVisibility = nextFlags
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
