@@ -183,8 +183,8 @@ private object InterfaceStateDialog {
 
     fun show(context: Context) {
         val cfg = ConfigManager.getDefaultConfig()
-        var topMode = cfg.getIntOrDefault("tnt_interface_top_mode", 2).coerceIn(0, 2)
-        var bottomMode = cfg.getIntOrDefault("tnt_interface_bottom_mode", 2).coerceIn(0, 2)
+        var topMode = cfg.getIntOrDefault("tnt_interface_top_mode", 0).coerceIn(0, 2)
+        var bottomMode = cfg.getIntOrDefault("tnt_interface_bottom_mode", 0).coerceIn(0, 2)
         var topColor = cfg.getIntOrDefault("tnt_interface_top_color", 0x182740)
         var bottomColor = cfg.getIntOrDefault("tnt_interface_bottom_color", 0x182740)
         var topAlpha = cfg.getIntOrDefault("tnt_interface_top_alpha", 86).coerceIn(0, 100)
@@ -253,15 +253,34 @@ private object InterfaceStateDialog {
                 override fun onStopTrackingTouch(bar: SeekBar?) = Unit
             })
         })
-        heading("统一颜色")
-        colors.forEach { (name, color) ->
-            root.addView(TextView(context).apply {
-                text = "●  $name"; textSize = 13f
-                setTextColor(Color.rgb(Color.red(color), Color.green(color), Color.blue(color)))
-                setPadding(dp(context, 6), dp(context, 5), dp(context, 6), dp(context, 5))
-                setOnClickListener { topColor = color; bottomColor = color }
-            })
+        fun colorPicker(title: String, selected: (Int) -> Unit) {
+            heading(title)
+            val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
+            colors.forEach { (name, color) ->
+                row.addView(TextView(context).apply {
+                    text = name
+                    textSize = 10f
+                    gravity = android.view.Gravity.CENTER
+                    setTextColor(if (Color.luminance(color) < .45f) Color.WHITE else Color.BLACK)
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        cornerRadius = dp(context, 8).toFloat()
+                        setColor(Color.rgb(Color.red(color), Color.green(color), Color.blue(color)))
+                    }
+                    setPadding(dp(context, 5), dp(context, 8), dp(context, 5), dp(context, 8))
+                    setOnClickListener { selected(color) }
+                }, LinearLayout.LayoutParams(0, -2, 1f).apply {
+                    marginEnd = dp(context, 4)
+                })
+            }
+            root.addView(row)
         }
+        colorPicker("顶栏颜色") { topColor = it }
+        colorPicker("底栏颜色") { bottomColor = it }
+        TextView(context).apply {
+            text = "悬浮面板同步使用顶栏颜色；透明度可单独调整。"
+            textSize = 11f
+            setPadding(0, dp(context, 7), 0, 0)
+        }.also(root::addView)
         AlertDialog.Builder(context)
             .setTitle("抓取区 · 界面状态控制")
             .setMessage("颜色/半透明模式按透明度绘制系统栏；完全透明模式会让 QQ 内容延伸到系统栏后方。若页面布局不适配，改回“跟随页面”。")
