@@ -94,9 +94,18 @@ private fun migrateLegacyInspectorSetting() {
     runCatching {
         val config = ConfigManager.getDefaultConfig()
         val newKey = Constants.PrekXXX + "抓取区/控件探测器"
-        val legacyKey = Constants.PrekXXX + "开发者选项/QQ界面控件探测器"
-        if (!config.getBooleanOrFalse(newKey) && config.getBooleanOrFalse(legacyKey)) {
-            config.edit().putBoolean(newKey, true).putBoolean(legacyKey, false).apply()
+        if (!config.getBooleanOrFalse(newKey)) {
+            val legacyKeys = listOf(
+                "开发者选项/QQ界面控件探测器",
+                "黑壳区/控件探测器",
+                "抓取区/QQ界面控件探测器"
+            ).map { Constants.PrekXXX + it }
+            val enabledLegacyKey = legacyKeys.firstOrNull { config.getBooleanOrFalse(it) }
+            if (enabledLegacyKey != null) {
+                val editor = config.edit().putBoolean(newKey, true)
+                legacyKeys.forEach { editor.putBoolean(it, false) }
+                editor.apply()
+            }
         }
     }.onFailure {
         Logger.w("TNT inspector setting migration failed: " + it.javaClass.simpleName)
