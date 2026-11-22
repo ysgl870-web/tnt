@@ -66,24 +66,40 @@ import kotlin.math.min
 )
 class QQViewInspector : BaseSwitchFunctionHookItem() {
 
+    override fun configIsEnable(): Boolean {
+        migrateLegacyInspectorSetting()
+        return super.configIsEnable()
+    }
+
     override fun targetProcess(): Int {
         return SyncUtils.PROC_MAIN or SyncUtils.PROC_TOOL or
             SyncUtils.PROC_MINI or SyncUtils.PROC_WXA_CONTAINER
     }
 
     override fun entry(classLoader: ClassLoader) {
-        QQInspectorRuntime.install()
+        migrateLegacyInspectorSetting()
+        val currentActivity = ContextUtils.getCurrentActivity()
+        QQInspectorRuntime.install(currentActivity)
         QQInspectorLinks.install(classLoader)
-        runCatching {
-            val config = ConfigManager.getDefaultConfig()
-            val newKey = Constants.PrekXXX + path
-            val legacyKey = Constants.PrekXXX + "开发者选项/QQ界面控件探测器"
-            if (config.getBooleanOrFalse(legacyKey) && !config.getBooleanOrFalse(newKey)) {
-                config.edit().putBoolean(newKey, true).putBoolean(legacyKey, false).apply()
+        currentActivity?.let { activity ->
+            if (QQInspectorRuntime.isEnabled()) {
+                activity.window.decorView.post { QQInspectorRuntime.attach(activity) }
             }
-            ContextUtils.getCurrentActivity()?.let { if (config.getBooleanOrFalse(newKey)) QQInspectorRuntime.attach(it) }
         }
         Logger.i("TNT QQViewInspector installed")
+    }
+}
+
+private fun migrateLegacyInspectorSetting() {
+    runCatching {
+        val config = ConfigManager.getDefaultConfig()
+        val newKey = Constants.PrekXXX + "抓取区/控件探测器"
+        val legacyKey = Constants.PrekXXX + "开发者选项/QQ界面控件探测器"
+        if (!config.getBooleanOrFalse(newKey) && config.getBooleanOrFalse(legacyKey)) {
+            config.edit().putBoolean(newKey, true).putBoolean(legacyKey, false).apply()
+        }
+    }.onFailure {
+        Logger.w("TNT inspector setting migration failed: " + it.javaClass.simpleName)
     }
 }
 
@@ -309,11 +325,14 @@ private object QQInspectorRuntime {
     private const val PANEL_OPEN_KEY = "tnt_qq_inspector_panel_open_v1"
     @Volatile private var lastActivity = java.lang.ref.WeakReference<Activity>(null)
 
-    fun install() {
+    fun install(fallbackActivity: Activity? = null) {
         if (installed) return
         synchronized(this) {
             if (installed) return
-            val app = runCatching { HostInfo.getApplication() }.getOrNull() ?: return
+            val app = runCatching { HostInfo.getApplication() }.getOrNull()
+                ?: fallbackActivity?.application
+                ?: runCatching { ContextUtils.getCurrentActivity()?.application }.getOrNull()
+                ?: return
             try {
                 app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
                     override fun onActivityCreated(activity: Activity, state: Bundle?) {
@@ -324,18 +343,20 @@ private object QQInspectorRuntime {
                     }
                     override fun onActivityStarted(activity: Activity) = Unit
                     override fun onActivityResumed(activity: Activity) {
-                        runCatching {
-                            if (isEnabled()) {
-                                QQInspectorLinks.captureActivity(activity)
-                                InspectorControlState.applyPersistent(activity)
-                                QQInspectorPersistentControls.apply(activity)
-                                attach(activity)
-                            } else {
-                                setPanelOpen(false)
-                                detach(activity)
+                        activity.window.decorView.post {
+                            runCatching {
+                                if (isEnabled()) {
+                                    QQInspectorLinks.captureActivity(activity)
+                                    InspectorControlState.applyPersistent(activity)
+                                    QQInspectorPersistentControls.apply(activity)
+                                    attach(activity)
+                                } else {
+                                    setPanelOpen(false)
+                                    detach(activity)
+                                }
+                            }.onFailure {
+                                Logger.e("TNT inspector Activity resume failed", it)
                             }
-                        }.onFailure {
-                            Logger.e("TNT inspector Activity resume failed", it)
                         }
                     }
                     override fun onActivityPaused(activity: Activity) = Unit
@@ -353,7 +374,7 @@ private object QQInspectorRuntime {
         }
     }
 
-    private fun isEnabled(): Boolean = runCatching {
+    fun isEnabled(): Boolean = runCatching {
         ConfigManager.getDefaultConfig().getBooleanOrFalse(Constants.PrekXXX + "抓取区/控件探测器")
     }.getOrDefault(false)
 
@@ -387,6 +408,7 @@ private object QQInspectorRuntime {
     }
 
     fun attach(activity: Activity) {
+        install(activity)
         if (!isEnabled() || activity.isFinishing || activity.isDestroyed) return
         val pkg = runCatching { activity.applicationContext.packageName }.getOrDefault(activity.packageName)
         if (pkg != "com.tencent.mobileqq" && pkg != "com.tencent.tim") return
@@ -404,7 +426,15 @@ private object QQInspectorRuntime {
         }
         lastActivity = java.lang.ref.WeakReference(activity)
 
-        val content = activity.findViewById<ViewGroup>(android.R.id.content) ?: return
+        val content = activity.findViewById<ViewGroup>(android.R.id.content)
+            ?: (activity.window.decorView as? ViewGroup)?.findViewById(android.R.id.content)
+            ?: return
+        if (!content.isAttachedToWindow) {
+            activity.window.decorView.post {
+                if (!activity.isFinishing && !activity.isDestroyed) attach(activity)
+            }
+            return
+        }
         val existingOverlay = (0 until content.childCount).any { content.getChildAt(it) is InspectorOverlay }
         val existingButton = content.findViewWithTag<View>(BUTTON_TAG)
 
