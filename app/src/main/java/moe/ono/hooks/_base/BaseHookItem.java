@@ -79,8 +79,8 @@ public abstract class BaseHookItem {
         }
         try {
             isLoad = true;
-            initOnce();
-            if (initOnce()) {
+            boolean shouldContinue = initOnce();
+            if (shouldContinue) {
                 entry(HybridClassLoader.getHostClassLoader());
             }
         } catch (Throwable e) {
