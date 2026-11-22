@@ -57,7 +57,7 @@ import kotlin.math.min
  * captures screenshots, or transmits data to a server.
  */
 @HookItem(
-    path = "开发者选项/QQ界面控件探测器",
+    path = "抓取区/QQ界面控件探测器",
     description = "开启后在 QQ 页面显示「控件」入口；可绘制控件边框、按面积从小到大列出控件，并查看类名、资源ID、坐标、透明度和链接。读取文本需单独确认。"
 )
 class QQViewInspector : BaseSwitchFunctionHookItem() {
@@ -68,9 +68,15 @@ class QQViewInspector : BaseSwitchFunctionHookItem() {
     }
 
     override fun entry(classLoader: ClassLoader) {
-        QQInspectorRuntime.install()
+        migrateInspectorSetting()
+        val currentActivity = ContextUtils.getCurrentActivity()
+        QQInspectorRuntime.install(currentActivity)
         QQInspectorLinks.install(classLoader)
-        runCatching { ContextUtils.getCurrentActivity()?.let { if (ConfigManager.getDefaultConfig().getBooleanOrFalse(Constants.PrekXXX + path)) QQInspectorRuntime.attach(it) } }
+        currentActivity?.let { activity ->
+            if (QQInspectorRuntime.isEnabled()) {
+                activity.window.decorView.post { QQInspectorRuntime.attach(activity) }
+            }
+        }
         Logger.i("TNT QQViewInspector installed")
     }
 }
@@ -79,7 +85,7 @@ class QQViewInspector : BaseSwitchFunctionHookItem() {
  * A one-shot history viewer. Link capture is activated with QQ界面控件探测器.
  */
 @HookItem(
-    path = "开发者选项/查看QQ链接记录",
+    path = "抓取区/查看QQ链接记录",
     description = "查看本机保存的最近100条QQ Scheme、Activity跳转和WebView页面链接；支持复制与清空。"
 )
 class QQInspectorLinkHistory : BaseClickableFunctionHookItem() {
@@ -113,6 +119,30 @@ class QQInspectorLinkHistory : BaseClickableFunctionHookItem() {
     }
 }
 
+private fun migrateInspectorSetting() {
+    runCatching {
+        val config = ConfigManager.getDefaultConfig()
+        val currentKey = Constants.PrekXXX + "抓取区/QQ界面控件探测器"
+        if (config.getBooleanOrFalse(currentKey)) return
+        val legacyPaths = listOf(
+            "开发者选项/QQ界面控件探测器",
+            "黑壳区/控件探测器",
+            "抓取区/控件探测器"
+        )
+        val legacyKey = legacyPaths
+            .map { Constants.PrekXXX + it }
+            .firstOrNull { config.getBooleanOrFalse(it) }
+        if (legacyKey != null) {
+            config.edit()
+                .putBoolean(currentKey, true)
+                .putBoolean(legacyKey, false)
+                .apply()
+        }
+    }.onFailure {
+        Logger.w("TNT inspector setting migration failed: " + it.javaClass.simpleName)
+    }
+}
+
 private fun copyText(context: Context, label: String, value: String) {
     runCatching {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -126,12 +156,16 @@ private fun copyText(context: Context, label: String, value: String) {
 private object QQInspectorRuntime {
     @Volatile private var installed = false
     private const val BUTTON_TAG = "tnt.qq.inspector.entry"
+    private const val FEATURE_PATH = "抓取区/QQ界面控件探测器"
 
-    fun install() {
+    fun install(fallbackActivity: Activity? = null) {
         if (installed) return
         synchronized(this) {
             if (installed) return
-            val app = runCatching { HostInfo.getApplication() }.getOrNull() ?: return
+            val app = runCatching { HostInfo.getApplication() }.getOrNull()
+                ?: fallbackActivity?.application
+                ?: runCatching { ContextUtils.getCurrentActivity()?.application }.getOrNull()
+                ?: return
             try {
                 app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
                     override fun onActivityCreated(activity: Activity, state: Bundle?) {
@@ -142,16 +176,18 @@ private object QQInspectorRuntime {
                     }
                     override fun onActivityStarted(activity: Activity) = Unit
                     override fun onActivityResumed(activity: Activity) {
-                        runCatching {
-                            if (isEnabled()) {
-                                QQInspectorLinks.captureActivity(activity)
-                                InspectorControlState.applyPersistent(activity)
-                                attach(activity)
-                            } else {
-                                detach(activity)
+                        activity.window.decorView.post {
+                            runCatching {
+                                if (isEnabled()) {
+                                    QQInspectorLinks.captureActivity(activity)
+                                    InspectorControlState.applyPersistent(activity)
+                                    attach(activity)
+                                } else {
+                                    detach(activity)
+                                }
+                            }.onFailure {
+                                Logger.e("TNT inspector Activity resume failed", it)
                             }
-                        }.onFailure {
-                            Logger.e("TNT inspector Activity resume failed", it)
                         }
                     }
                     override fun onActivityPaused(activity: Activity) = Unit
@@ -166,8 +202,8 @@ private object QQInspectorRuntime {
         }
     }
 
-    private fun isEnabled(): Boolean = runCatching {
-        ConfigManager.getDefaultConfig().getBooleanOrFalse(Constants.PrekXXX + "开发者选项/QQ界面控件探测器")
+    fun isEnabled(): Boolean = runCatching {
+        ConfigManager.getDefaultConfig().getBooleanOrFalse(Constants.PrekXXX + FEATURE_PATH)
     }.getOrDefault(false)
 
     fun detach(activity: Activity) {
@@ -180,11 +216,20 @@ private object QQInspectorRuntime {
     }
 
     fun attach(activity: Activity) {
+        install(activity)
         if (!isEnabled() || activity.isFinishing || activity.isDestroyed) return
         val pkg = runCatching { activity.packageName }.getOrDefault("")
         if (pkg != "com.tencent.mobileqq" && pkg != "com.tencent.tim") return
         if (activity.javaClass.name.startsWith("moe.ono.")) return
-        val content = activity.findViewById<ViewGroup>(android.R.id.content) ?: return
+        val content = activity.findViewById<ViewGroup>(android.R.id.content)
+            ?: (activity.window.decorView as? ViewGroup)?.findViewById(android.R.id.content)
+            ?: return
+        if (!content.isAttachedToWindow) {
+            activity.window.decorView.post {
+                if (!activity.isFinishing && !activity.isDestroyed) attach(activity)
+            }
+            return
+        }
         if (content.findViewWithTag<View>(BUTTON_TAG) != null) return
 
         val button = InspectorEntryView(activity) {
@@ -1155,7 +1200,7 @@ private class InspectorOverlay private constructor(
     private fun disableFeature() {
         runSafely {
             ConfigManager.getDefaultConfig().edit()
-                .putBoolean(Constants.PrekXXX + "开发者选项/QQ界面控件探测器", false)
+                .putBoolean(Constants.PrekXXX + "抓取区/QQ界面控件探测器", false)
                 .apply()
             QQInspectorRuntime.detach(activity)
             Toast.makeText(activity, "控件探测器已停用，可在 TNT 设置中重新开启", Toast.LENGTH_LONG).show()
@@ -1316,7 +1361,7 @@ private object QQInspectorLinks {
     private const val MAX_ROWS = 100
     private val lock = Any()
     private val recent = LinkedHashMap<String, Long>()
-    private const val FEATURE_KEY = "开发者选项/QQ界面控件探测器"
+    private const val FEATURE_KEY = "抓取区/QQ界面控件探测器"
 
     private fun enabled(): Boolean = runCatching {
         ConfigManager.getDefaultConfig().getBooleanOrFalse(Constants.PrekXXX + FEATURE_KEY)
