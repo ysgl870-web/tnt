@@ -430,9 +430,16 @@ private object QQInspectorRuntime {
             ?: (activity.window.decorView as? ViewGroup)?.findViewById(android.R.id.content)
             ?: return
         if (!content.isAttachedToWindow) {
-            activity.window.decorView.post {
-                if (!activity.isFinishing && !activity.isDestroyed) attach(activity)
+            val attachListener = object : View.OnAttachStateChangeListener {
+                override fun onViewAttachedToWindow(view: View) {
+                    view.removeOnAttachStateChangeListener(this)
+                    if (!activity.isFinishing && !activity.isDestroyed) {
+                        view.post { attach(activity) }
+                    }
+                }
+                override fun onViewDetachedFromWindow(view: View) = Unit
             }
+            content.addOnAttachStateChangeListener(attachListener)
             return
         }
         val existingOverlay = (0 until content.childCount).any { content.getChildAt(it) is InspectorOverlay }
