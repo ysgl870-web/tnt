@@ -62,6 +62,11 @@ import kotlin.math.min
 )
 class QQViewInspector : BaseSwitchFunctionHookItem() {
 
+    override fun configIsEnable(): Boolean {
+        migrateInspectorSetting()
+        return super.configIsEnable()
+    }
+
     override fun targetProcess(): Int {
         return SyncUtils.PROC_MAIN or SyncUtils.PROC_TOOL or
             SyncUtils.PROC_MINI or SyncUtils.PROC_WXA_CONTAINER
