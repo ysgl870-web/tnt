@@ -40,7 +40,7 @@ public abstract class BaseHookItem {
     }
 
     public String getPath() {
-        return path;
+        return path == null ? "" : path;
     }
 
 
@@ -58,11 +58,15 @@ public abstract class BaseHookItem {
     }
 
     public String getItemName() {
-        int index = path.lastIndexOf("/");
-        if (index == -1) {
-            return path;
+        String safePath = getPath();
+        if (safePath.trim().isEmpty()) {
+            return getSimpleName();
         }
-        return path.substring(index + 1);
+        int index = safePath.lastIndexOf("/");
+        if (index == -1) {
+            return safePath;
+        }
+        return safePath.substring(index + 1);
     }
 
     public boolean isLoad() {
