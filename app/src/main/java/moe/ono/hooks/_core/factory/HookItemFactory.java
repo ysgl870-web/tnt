@@ -17,13 +17,25 @@ public class HookItemFactory {
     static {
         List<BaseHookItem> items = HookItemEntryList.getAllHookItems();
         for (BaseHookItem item : items) {
+            if (item == null) {
+                continue;
+            }
+            String path = item.getPath();
+            if (path == null || path.trim().isEmpty()) {
+                android.util.Log.w("TNT-HookItemFactory",
+                        "Skip hook item without a valid path: " + item.getClass().getName());
+                continue;
+            }
             ITEM_MAP.put(item.getClass(), item);
         }
     }
 
     public static BaseSwitchFunctionHookItem findHookItemByPath(String path) {
+        if (path == null || path.trim().isEmpty()) {
+            return null;
+        }
         for (BaseHookItem item : ITEM_MAP.values()) {
-            if (item.getPath().equals(path)) {
+            if (path.equals(item.getPath()) && item instanceof BaseSwitchFunctionHookItem) {
                 return (BaseSwitchFunctionHookItem) item;
             }
         }
